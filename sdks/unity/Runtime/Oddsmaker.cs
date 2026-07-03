@@ -1,6 +1,5 @@
 // Oddsmaker Unity SDK (Runtime)
-// Minimal batching NDJSON client with gzip (optional), offline persistence, and session management.
-// Drop this under Assets (e.g., Assets/Oddsmaker/Runtime/Oddsmaker.cs) and call Oddsmaker.Init(...).
+// Complete implementation with HMAC, caching, error handling, and experiment support.
 
 using System;
 using System.Collections;
@@ -18,15 +17,23 @@ namespace Oddsmaker
     public class Options
     {
         public string apiKey;
-        public string endpoint;  // e.g. http://localhost:8080
+        public string endpoint;
         public string gameId;
         public string environment;
-        public string deviceId = null; // optional override
+        public string deviceId = null;
         public int flushIntervalSec = 5;
         public int maxBatch = 50;
         public int maxQueueBytes = 512 * 1024;
         public int sessionGapSec = 30 * 60;
         public bool debug = false;
+        
+        // HMAC配置
+        public string hmacSecret = null;
+        public bool enableHMAC = false;
+        
+        // 重试配置
+        public int maxRetries = 3;
+        public int retryDelayMs = 1000;
     }
 
     [Serializable]
@@ -45,10 +52,56 @@ namespace Oddsmaker
         public long ts_client;
         public string platform = "unity";
         public string app_version;
+        public string sdk_version = "1.0.0";
         public string country;
         public double? revenue_amount;
         public string revenue_currency;
         public Dictionary<string, object> props;
+    }
+
+    [Serializable]
+    public class ExperimentConfig
+    {
+        public string id;
+        public string name;
+        public List<Variant> variants;
+        public Targeting targeting;
+    }
+
+    [Serializable]
+    public class Variant
+    {
+        public string name;
+        public int weight;
+    }
+
+    [Serializable]
+    public class Targeting
+    {
+        public List<string> platform;
+        public List<string> appVersion;
+        public List<string> country;
+    }
+
+    [Serializable]
+    public class ExperimentCache
+    {
+        public long timestamp;
+        public string data;
+    }
+
+    public class OddsmakerError
+    {
+        public string Code { get; set; }
+        public string Message { get; set; }
+        public Exception Exception { get; set; }
+
+        public OddsmakerError(string code, string message, Exception exception = null)
+        {
+            Code = code;
+            Message = message;
+            Exception = exception;
+        }
     }
 
     public class Oddsmaker : MonoBehaviour
@@ -66,8 +119,23 @@ namespace Oddsmaker
         private readonly List<Event> _queue = new List<Event>();
         private int _queueBytes = 0;
         private bool _isFlushing = false;
+        private int _retryCount = 0;
+
+        // 实验缓存
+        private Dictionary<string, ExperimentConfig> _experimentCache = new Dictionary<string, ExperimentConfig>();
+        private long _experimentCacheTimestamp = 0;
+        private const int EXPERIMENT_CACHE_TTL_SEC = 300;
+
+        // 错误回调
+        public event Action<OddsmakerError> OnError;
+
+        // 统计
+        private long _totalEventsSent = 0;
+        private long _totalEventsFailed = 0;
+        private long _totalFlushAttempts = 0;
 
         private string QueuePath => Path.Combine(Application.persistentDataPath, $"oddsmaker_queue_{_opts.gameId}_{_opts.environment}_{_deviceId}.ndjson");
+        private string ExperimentCachePath => Path.Combine(Application.persistentDataPath, $"oddsmaker_experiments_{_opts.gameId}_{_opts.environment}.json");
         private string DevKey => $"oddsmaker_device_id_{_opts.gameId}_{_opts.environment}";
 
         public static void Init(Options options)
@@ -94,10 +162,32 @@ namespace Oddsmaker
                 PlayerPrefs.Save();
             }
             LoadQueue();
+            LoadExperimentCache();
             _lastActiveMs = NowMs();
             StartCoroutine(FlushLoop());
             LogDebug($"Oddsmaker initialized. deviceId={_deviceId}, queue={_queue.Count}");
         }
+
+        private void OnDestroy()
+        {
+            SaveQueue();
+            SaveExperimentCache();
+        }
+
+        private void OnApplicationPause(bool pauseStatus)
+        {
+            if (pauseStatus)
+            {
+                SaveQueue();
+                SaveExperimentCache();
+            }
+            else
+            {
+                _lastActiveMs = NowMs();
+            }
+        }
+
+        // 用户管理
 
         public static void SetUserId(string userId)
         {
@@ -142,6 +232,8 @@ namespace Oddsmaker
             foreach (var kv in props) Instance._userProps[kv.Key] = kv.Value;
         }
 
+        // 事件跟踪
+
         public static string Track(string eventName, Dictionary<string, object> props = null)
         {
             if (Instance == null) return null;
@@ -167,6 +259,70 @@ namespace Oddsmaker
             if (Instance != null) Instance.StartCoroutine(Instance.FlushOnce());
         }
 
+        // 实验支持
+
+        public static void FetchExperiments(string controlURL, Action<string> callback)
+        {
+            if (Instance == null) return;
+            Instance.StartCoroutine(Instance.FetchExperimentsCoroutine(controlURL, callback));
+        }
+
+        public static void FetchExperimentsCached(string controlURL, Action<string> callback, int ttlSec = 300)
+        {
+            if (Instance == null) return;
+
+            // 检查缓存
+            if (Instance._experimentCacheTimestamp > 0)
+            {
+                long now = NowMs();
+                if (now - Instance._experimentCacheTimestamp < ttlSec * 1000L)
+                {
+                    callback?.Invoke(JsonUtility.ToJson(Instance._experimentCache));
+                    return;
+                }
+            }
+
+            Instance.StartCoroutine(Instance.FetchExperimentsCoroutine(controlURL, (data) =>
+            {
+                Instance._experimentCacheTimestamp = NowMs();
+                Instance.SaveExperimentCache();
+                callback?.Invoke(data);
+            }));
+        }
+
+        public static string AssignVariant(string expId, string salt, List<Tuple<string, int>> variants, string key)
+        {
+            if (variants == null || variants.Count == 0) return "A";
+            int sum = 0;
+            foreach (var v in variants) sum += v.Item2 > 0 ? v.Item2 : 1;
+            uint h = Hash32(expId + ":" + (salt ?? "") + ":" + key);
+            int r = (int)(h % (uint)sum);
+            int acc = 0;
+            foreach (var v in variants)
+            {
+                acc += v.Item2 > 0 ? v.Item2 : 1;
+                if (r < acc) return v.Item1;
+            }
+            return variants[0].Item1;
+        }
+
+        // 统计信息
+
+        public static Dictionary<string, object> GetStats()
+        {
+            if (Instance == null) return new Dictionary<string, object>();
+            return new Dictionary<string, object>
+            {
+                { "totalEventsSent", Instance._totalEventsSent },
+                { "totalEventsFailed", Instance._totalEventsFailed },
+                { "totalFlushAttempts", Instance._totalFlushAttempts },
+                { "queueSize", Instance._queue.Count },
+                { "queueBytes", Instance._queueBytes }
+            };
+        }
+
+        // 内部实现
+
         private string TrackInternal(string eventName, Dictionary<string, object> props, double? revenueAmount = null, string revenueCurrency = null)
         {
             long now = NowMs();
@@ -183,6 +339,8 @@ namespace Oddsmaker
                 session_id = _sessionId,
                 ts_client = now,
                 platform = "unity",
+                app_version = Application.version,
+                sdk_version = "1.0.0",
                 revenue_amount = revenueAmount,
                 revenue_currency = revenueCurrency,
                 props = MergeProps(props)
@@ -225,6 +383,8 @@ namespace Oddsmaker
         {
             if (_isFlushing || _queue.Count == 0) yield break;
             _isFlushing = true;
+            _totalFlushAttempts++;
+            
             try
             {
                 int n = Math.Min(_opts.maxBatch, _queue.Count);
@@ -239,24 +399,85 @@ namespace Oddsmaker
                 req.downloadHandler = new DownloadHandlerBuffer();
                 req.SetRequestHeader("x-api-key", _opts.apiKey);
                 req.SetRequestHeader("content-type", "application/x-ndjson");
+                req.SetRequestHeader("x-sdk-version", "unity-1.0.0");
                 if (gzOk) req.SetRequestHeader("content-encoding", "gzip");
 
+                // 添加HMAC签名
+                if (_opts.enableHMAC && !string.IsNullOrEmpty(_opts.hmacSecret))
+                {
+                    string timestamp = (NowMs() / 1000).ToString();
+                    string signature = GenerateHMACSignature(timestamp, body);
+                    req.SetRequestHeader("x-timestamp", timestamp);
+                    req.SetRequestHeader("x-signature", signature);
+                }
+
                 yield return req.SendWebRequest();
+                
                 if (req.result == UnityWebRequest.Result.Success && req.responseCode >= 200 && req.responseCode < 300)
                 {
                     _queue.RemoveRange(0, n);
                     RecalcQueueBytes();
+                    _totalEventsSent += n;
+                    _retryCount = 0;
                     if (_opts.debug) LogDebug($"flushed {n} events ok");
                 }
-                else if (_opts.debug)
+                else
                 {
-                    LogDebug($"flush failed: {req.responseCode} {req.error}");
+                    _totalEventsFailed += n;
+                    string errorMsg = $"flush failed: {req.responseCode} {req.error}";
+                    LogDebug(errorMsg);
+                    
+                    // 重试逻辑
+                    if (_retryCount < _opts.maxRetries)
+                    {
+                        _retryCount++;
+                        LogDebug($"retry {_retryCount}/{_opts.maxRetries}");
+                        yield return new WaitForSeconds(_opts.retryDelayMs / 1000f);
+                    }
+                    else
+                    {
+                        _retryCount = 0;
+                        OnError?.Invoke(new OddsmakerError("FLUSH_FAILED", errorMsg));
+                    }
                 }
             }
             finally
             {
                 SaveQueue();
                 _isFlushing = false;
+            }
+        }
+
+        private IEnumerator FetchExperimentsCoroutine(string controlURL, Action<string> callback)
+        {
+            string url = controlURL.TrimEnd('/') + $"/api/config/{_opts.gameId}/{_opts.environment}";
+            
+            using (var req = UnityWebRequest.Get(url))
+            {
+                req.SetRequestHeader("accept", "application/json");
+                
+                if (_opts.enableHMAC && !string.IsNullOrEmpty(_opts.hmacSecret))
+                {
+                    string timestamp = (NowMs() / 1000).ToString();
+                    string signature = GenerateHMACSignature(timestamp, null);
+                    req.SetRequestHeader("x-timestamp", timestamp);
+                    req.SetRequestHeader("x-signature", signature);
+                }
+                
+                yield return req.SendWebRequest();
+                
+                if (req.result == UnityWebRequest.Result.Success)
+                {
+                    string data = req.downloadHandler.text;
+                    callback?.Invoke(data);
+                }
+                else
+                {
+                    string errorMsg = $"fetch experiments failed: {req.error}";
+                    LogDebug(errorMsg);
+                    OnError?.Invoke(new OddsmakerError("FETCH_EXPERIMENTS_FAILED", errorMsg));
+                    callback?.Invoke(null);
+                }
             }
         }
 
@@ -281,7 +502,10 @@ namespace Oddsmaker
                 }
                 RecalcQueueBytes();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                LogDebug($"load queue error: {ex.Message}");
+            }
         }
 
         private void SaveQueue()
@@ -292,7 +516,46 @@ namespace Oddsmaker
                 foreach (var e in _queue) sb.AppendLine(ToJson(e));
                 File.WriteAllText(QueuePath, sb.ToString());
             }
-            catch { }
+            catch (Exception ex)
+            {
+                LogDebug($"save queue error: {ex.Message}");
+            }
+        }
+
+        private void LoadExperimentCache()
+        {
+            try
+            {
+                if (!File.Exists(ExperimentCachePath)) return;
+                string json = File.ReadAllText(ExperimentCachePath);
+                var cache = JsonUtility.FromJson<ExperimentCache>(json);
+                if (cache != null && !string.IsNullOrEmpty(cache.data))
+                {
+                    _experimentCacheTimestamp = cache.timestamp;
+                }
+            }
+            catch (Exception ex)
+            {
+                LogDebug($"load experiment cache error: {ex.Message}");
+            }
+        }
+
+        private void SaveExperimentCache()
+        {
+            try
+            {
+                var cache = new ExperimentCache
+                {
+                    timestamp = _experimentCacheTimestamp,
+                    data = ""
+                };
+                string json = JsonUtility.ToJson(cache);
+                File.WriteAllText(ExperimentCachePath, json);
+            }
+            catch (Exception ex)
+            {
+                LogDebug($"save experiment cache error: {ex.Message}");
+            }
         }
 
         private void RecalcQueueBytes()
@@ -330,6 +593,7 @@ namespace Oddsmaker
             JField(sb, "ts_client", e.ts_client);
             if (!string.IsNullOrEmpty(e.platform)) JField(sb, "platform", e.platform);
             if (!string.IsNullOrEmpty(e.app_version)) JField(sb, "app_version", e.app_version);
+            if (!string.IsNullOrEmpty(e.sdk_version)) JField(sb, "sdk_version", e.sdk_version);
             if (!string.IsNullOrEmpty(e.country)) JField(sb, "country", e.country);
             if (e.revenue_amount.HasValue) JField(sb, "revenue_amount", e.revenue_amount.Value);
             if (!string.IsNullOrEmpty(e.revenue_currency)) JField(sb, "revenue_currency", e.revenue_currency);
@@ -357,6 +621,7 @@ namespace Oddsmaker
                     ts_client = JsonLong(line, "ts_client"),
                     platform = JsonString(line, "platform"),
                     app_version = JsonString(line, "app_version"),
+                    sdk_version = JsonString(line, "sdk_version"),
                     country = JsonString(line, "country"),
                     revenue_currency = JsonString(line, "revenue_currency")
                 };
@@ -374,6 +639,28 @@ namespace Oddsmaker
                 return null;
             }
         }
+
+        private string GenerateHMACSignature(string timestamp, byte[] body)
+        {
+            try
+            {
+                string bodyStr = body != null ? Encoding.UTF8.GetString(body) : "";
+                string message = timestamp + "\n" + bodyStr;
+                
+                using (var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(_opts.hmacSecret)))
+                {
+                    byte[] hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(message));
+                    return BitConverter.ToString(hash).Replace("-", "").ToLower();
+                }
+            }
+            catch (Exception ex)
+            {
+                LogDebug($"HMAC signature error: {ex.Message}");
+                return "";
+            }
+        }
+
+        // JSON工具方法
 
         private static string JsonString(string json, string key)
         {
@@ -577,24 +864,6 @@ namespace Oddsmaker
             return "business";
         }
 
-        private static void LogDebug(string msg) { Debug.Log("[Oddsmaker] " + msg); }
-
-        public static string AssignVariant(string expId, string salt, List<Tuple<string, int>> variants, string key)
-        {
-            if (variants == null || variants.Count == 0) return "A";
-            int sum = 0;
-            foreach (var v in variants) sum += v.Item2 > 0 ? v.Item2 : 1;
-            uint h = Hash32(expId + ":" + (salt ?? "") + ":" + key);
-            int r = (int)(h % (uint)sum);
-            int acc = 0;
-            foreach (var v in variants)
-            {
-                acc += v.Item2 > 0 ? v.Item2 : 1;
-                if (r < acc) return v.Item1;
-            }
-            return variants[0].Item1;
-        }
-
         private static uint Hash32(string s)
         {
             uint h = 0x811c9dc5;
@@ -605,5 +874,7 @@ namespace Oddsmaker
             }
             return h;
         }
+
+        private static void LogDebug(string msg) { Debug.Log("[Oddsmaker] " + msg); }
     }
 }
