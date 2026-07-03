@@ -8,46 +8,79 @@ import org.springframework.stereotype.Repository;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * 权限数据访问接口
+ */
 @Repository
 public interface PermissionRepo extends JpaRepository<PermissionEntity, String> {
 
     /**
-     * 根据代码查找权限
+     * 根据名称查找权限
      */
-    Optional<PermissionEntity> findByCodeAndDeletedAtIsNull(String code);
+    Optional<PermissionEntity> findByName(String name);
+
+    /**
+     * 根据类型查找权限
+     */
+    List<PermissionEntity> findByType(PermissionEntity.PermissionType type);
 
     /**
      * 根据资源类型查找权限
      */
-    List<PermissionEntity> findByResourceAndDeletedAtIsNullOrderByCodeAsc(PermissionEntity.Resource resource);
+    List<PermissionEntity> findByResourceType(String resourceType);
 
     /**
-     * 根据资源和操作查找权限
+     * 根据操作类型查找权限
      */
-    @Query("SELECT p FROM PermissionEntity p WHERE p.resource = :resource AND p.operation = :operation AND p.deletedAt IS NULL")
-    Optional<PermissionEntity> findByResourceAndOperation(@Param("resource") PermissionEntity.Resource resource, @Param("operation") PermissionEntity.Operation operation);
+    List<PermissionEntity> findByAction(PermissionEntity.PermissionAction action);
 
     /**
-     * 查找所有活跃权限
+     * 根据范围查找权限
      */
-    @Query("SELECT p FROM PermissionEntity p WHERE p.status = 'ACTIVE' AND p.deletedAt IS NULL ORDER BY p.category, p.displayOrder, p.code")
-    List<PermissionEntity> findActive();
+    List<PermissionEntity> findByScope(PermissionEntity.PermissionScope scope);
 
     /**
-     * 根据分类查找权限
+     * 查找启用的权限
      */
-    @Query("SELECT p FROM PermissionEntity p WHERE p.category = :category AND p.deletedAt IS NULL ORDER BY p.displayOrder")
-    List<PermissionEntity> findByCategory(@Param("category") String category);
+    List<PermissionEntity> findByEnabledTrue();
 
     /**
-     * 查找系统权限
+     * 查找系统内置权限
      */
-    @Query("SELECT p FROM PermissionEntity p WHERE p.isSystem = true AND p.deletedAt IS NULL ORDER BY p.code")
-    List<PermissionEntity> findSystemPermissions();
+    List<PermissionEntity> findBySystemTrue();
 
     /**
-     * 检查权限代码是否存在
+     * 根据资源类型和操作查找权限
      */
-    @Query("SELECT CASE WHEN COUNT(p) > 0 THEN true ELSE false END FROM PermissionEntity p WHERE p.code = :code AND p.deletedAt IS NULL")
-    boolean existsByCode(@Param("code") String code);
+    Optional<PermissionEntity> findByResourceTypeAndAction(
+            String resourceType, PermissionEntity.PermissionAction action);
+
+    /**
+     * 检查权限名称是否存在
+     */
+    boolean existsByName(String name);
+
+    /**
+     * 查找全局权限
+     */
+    @Query("SELECT p FROM PermissionEntity p WHERE p.scope = 'GLOBAL' AND p.enabled = true")
+    List<PermissionEntity> findGlobalPermissions();
+
+    /**
+     * 查找游戏级权限
+     */
+    @Query("SELECT p FROM PermissionEntity p WHERE p.scope = 'GAME' AND p.enabled = true")
+    List<PermissionEntity> findGamePermissions();
+
+    /**
+     * 查找环境级权限
+     */
+    @Query("SELECT p FROM PermissionEntity p WHERE p.scope = 'ENVIRONMENT' AND p.enabled = true")
+    List<PermissionEntity> findEnvironmentPermissions();
+
+    /**
+     * 根据资源类型查找启用的权限
+     */
+    @Query("SELECT p FROM PermissionEntity p WHERE p.resourceType = :resourceType AND p.enabled = true")
+    List<PermissionEntity> findByResourceTypeEnabled(@Param("resourceType") String resourceType);
 }

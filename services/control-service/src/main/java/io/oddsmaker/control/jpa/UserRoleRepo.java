@@ -10,72 +10,103 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 用户角色数据访问接口
+ * 用户-角色关联数据访问接口
  */
 @Repository
-public interface UserRoleRepo extends JpaRepository<UserRoleEntity, String> {
+public interface UserRoleRepo extends JpaRepository<UserRoleEntity, Long> {
 
     /**
-     * 根据用户ID查找角色
+     * 根据用户ID查找用户角色关联
      */
     List<UserRoleEntity> findByUserId(String userId);
 
     /**
-     * 根据用户ID和游戏ID查找角色
+     * 根据用户ID查找启用的用户角色关联
+     */
+    List<UserRoleEntity> findByUserIdAndEnabledTrue(String userId);
+
+    /**
+     * 根据角色ID查找用户角色关联
+     */
+    List<UserRoleEntity> findByRoleId(String roleId);
+
+    /**
+     * 根据用户ID和角色ID查找用户角色关联
+     */
+    Optional<UserRoleEntity> findByUserIdAndRoleId(String userId, String roleId);
+
+    /**
+     * 根据用户ID和游戏ID查找用户角色关联
      */
     List<UserRoleEntity> findByUserIdAndGameId(String userId, String gameId);
 
     /**
-     * 根据游戏ID查找所有用户角色
+     * 根据用户ID、游戏ID和环境查找用户角色关联
      */
-    List<UserRoleEntity> findByGameId(String gameId);
+    List<UserRoleEntity> findByUserIdAndGameIdAndEnvironment(String userId, String gameId, String environment);
 
     /**
-     * 查找指定角色的用户
+     * 查找有效的用户角色关联（启用且未过期）
      */
-    List<UserRoleEntity> findByRole(UserRoleEntity.RoleType role);
+    @Query("SELECT ur FROM UserRoleEntity ur WHERE ur.userId = :userId AND ur.enabled = true AND (ur.expiresAt IS NULL OR ur.expiresAt > :now)")
+    List<UserRoleEntity> findValidByUserId(@Param("userId") String userId, @Param("now") LocalDateTime now);
 
     /**
-     * 查找指定范围的角色
+     * 查找全局角色分配
      */
-    List<UserRoleEntity> findByScope(UserRoleEntity.PermissionScope scope);
+    @Query("SELECT ur FROM UserRoleEntity ur WHERE ur.userId = :userId AND ur.gameId IS NULL AND ur.enabled = true")
+    List<UserRoleEntity> findGlobalByUserId(@Param("userId") String userId);
 
     /**
-     * 检查用户是否有指定权限
+     * 查找游戏级角色分配
      */
-    @Query("SELECT COUNT(ur) > 0 FROM UserRoleEntity ur WHERE " +
-           "ur.userId = :userId AND ur.role = :role AND " +
-           "(:gameId IS NULL OR ur.gameId = :gameId) AND " +
-           "(:environmentId IS NULL OR ur.environmentId = :environmentId) AND " +
-           "(ur.expiresAt IS NULL OR ur.expiresAt > :now)")
-    boolean hasRole(@Param("userId") String userId,
-                   @Param("role") UserRoleEntity.RoleType role,
-                   @Param("gameId") String gameId,
-                   @Param("environmentId") String environmentId,
-                   @Param("now") LocalDateTime now);
+    @Query("SELECT ur FROM UserRoleEntity ur WHERE ur.userId = :userId AND ur.gameId = :gameId AND ur.environment IS NULL AND ur.enabled = true")
+    List<UserRoleEntity> findGameScopedByUserIdAndGameId(@Param("userId") String userId, @Param("gameId") String gameId);
 
     /**
-     * 查找待接受的邀请角色
+     * 查找环境级角色分配
      */
-    List<UserRoleEntity> findByInvitationAcceptedFalseAndInvitationExpiresAfter(LocalDateTime now);
+    @Query("SELECT ur FROM UserRoleEntity ur WHERE ur.userId = :userId AND ur.gameId = :gameId AND ur.environment = :environment AND ur.enabled = true")
+    List<UserRoleEntity> findEnvironmentScopedByUserIdAndGameIdAndEnvironment(
+            @Param("userId") String userId, @Param("gameId") String gameId, @Param("environment") String environment);
 
     /**
-     * 查找过期的角色
+     * 检查用户是否拥有指定角色
      */
-    List<UserRoleEntity> findByExpiresAtBefore(LocalDateTime now);
+    @Query("SELECT COUNT(ur) > 0 FROM UserRoleEntity ur WHERE ur.userId = :userId AND ur.roleId = :roleId AND ur.enabled = true AND (ur.expiresAt IS NULL OR ur.expiresAt > :now)")
+    boolean existsByUserIdAndRoleId(@Param("userId") String userId, @Param("roleId") String roleId, @Param("now") LocalDateTime now);
 
     /**
-     * 根据邀请令牌查找角色
+     * 检查用户是否拥有指定角色（在指定游戏中）
      */
-    Optional<UserRoleEntity> findByInvitationToken(String token);
+    @Query("SELECT COUNT(ur) > 0 FROM UserRoleEntity ur WHERE ur.userId = :userId AND ur.roleId = :roleId AND ur.gameId = :gameId AND ur.enabled = true AND (ur.expiresAt IS NULL OR ur.expiresAt > :now)")
+    boolean existsByUserIdAndRoleIdAndGameId(@Param("userId") String userId, @Param("roleId") String roleId, @Param("gameId") String gameId, @Param("now") LocalDateTime now);
 
     /**
-     * 删除用户的所有角色
+     * 查找过期的用户角色关联
+     */
+    @Query("SELECT ur FROM UserRoleEntity ur WHERE ur.expiresAt IS NOT NULL AND ur.expiresAt <= :now AND ur.enabled = true")
+    List<UserRoleEntity> findExpired(@Param("now") LocalDateTime now);
+
+    /**
+     * 删除用户的所有角色关联
      */
     void deleteByUserId(String userId);
 
     /**
-     * 删除游戏下的所有角色
+     * 删除用户在指定游戏中的角色关联
      */
-    void deleteByGameId(String gameId);
+    void deleteByUserIdAndGameId(String userId, String gameId);
+
+    /**
+     * 统计角色分配数量
+     */
+    @Query("SELECT ur.roleId, COUNT(ur) as count FROM UserRoleEntity ur WHERE ur.enabled = true GROUP BY ur.roleId")
+    List<Object> countByRoleId();
+
+    /**
+     * 统计用户的角色数量
+     */
+    @Query("SELECT ur.userId, COUNT(ur) as count FROM UserRoleEntity ur WHERE ur.enabled = true GROUP BY ur.userId")
+    List<Object> countByUserId();
 }

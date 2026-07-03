@@ -8,66 +8,68 @@ import org.springframework.stereotype.Repository;
 import java.util.List;
 import java.util.Optional;
 
-import static io.oddsmaker.control.jpa.RoleEntity.RoleScope;
-
+/**
+ * 角色数据访问接口
+ */
 @Repository
 public interface RoleRepo extends JpaRepository<RoleEntity, String> {
 
     /**
-     * 根据代码查找角色
+     * 根据名称查找角色
      */
-    Optional<RoleEntity> findByCodeAndDeletedAtIsNull(String code);
+    Optional<RoleEntity> findByName(String name);
 
     /**
      * 根据类型查找角色
      */
-    List<RoleEntity> findByTypeAndDeletedAtIsNullOrderByLevelAsc(RoleEntity.RoleType type);
+    List<RoleEntity> findByType(RoleEntity.RoleType type);
 
     /**
-     * 查找所有活跃角色
+     * 查找启用的角色
      */
-    @Query("SELECT r FROM RoleEntity r WHERE r.status = 'ACTIVE' AND r.deletedAt IS NULL ORDER BY r.level, r.code")
-    List<RoleEntity> findActive();
+    List<RoleEntity> findByEnabledTrue();
 
     /**
-     * 根据范围查找角色
+     * 查找系统内置角色
      */
-    @Query("SELECT r FROM RoleEntity r WHERE r.scope = :scope AND r.deletedAt IS NULL ORDER BY r.level, r.code")
-    List<RoleEntity> findByScope(@Param("scope") RoleScope scope);
+    List<RoleEntity> findBySystemTrue();
 
     /**
-     * 查找默认角色
+     * 根据级别查找角色
      */
-    @Query("SELECT r FROM RoleEntity r WHERE r.isDefault = true AND r.status = 'ACTIVE' AND r.deletedAt IS NULL")
-    List<RoleEntity> findDefaultRoles();
+    List<RoleEntity> findByLevelGreaterThanEqual(Integer level);
 
     /**
-     * 查找系统角色
+     * 检查角色名称是否存在
      */
-    @Query("SELECT r FROM RoleEntity r WHERE r.isSystem = true AND r.deletedAt IS NULL ORDER BY r.level, r.code")
-    List<RoleEntity> findSystemRoles();
+    boolean existsByName(String name);
 
     /**
-     * 根据父角色查找子角色
+     * 查找可管理的角色（级别低于指定级别）
      */
-    @Query("SELECT r FROM RoleEntity r WHERE r.parentRoleId = :parentRoleId AND r.deletedAt IS NULL ORDER BY r.level, r.code")
-    List<RoleEntity> findByParentRoleId(@Param("parentRoleId") String parentRoleId);
+    @Query("SELECT r FROM RoleEntity r WHERE r.level < :level AND r.enabled = true ORDER BY r.level DESC")
+    List<RoleEntity> findManageableRoles(@Param("level") Integer level);
 
     /**
-     * 检查角色代码是否存在
+     * 查找包含指定权限的角色
      */
-    @Query("SELECT CASE WHEN COUNT(r) > 0 THEN true ELSE false END FROM RoleEntity r WHERE r.code = :code AND r.deletedAt IS NULL")
-    boolean existsByCode(@Param("code") String code);
+    @Query("SELECT r FROM RoleEntity r JOIN r.permissions p WHERE p.id = :permissionId AND r.enabled = true")
+    List<RoleEntity> findByPermissionId(@Param("permissionId") String permissionId);
 
     /**
-     * 增加角色用户计数
+     * 查找自定义角色
      */
-    @Query("UPDATE RoleEntity r SET r.userCount = r.userCount + 1 WHERE r.id = :roleId")
-    void incrementUserCount(@Param("roleId") String roleId);
+    @Query("SELECT r FROM RoleEntity r WHERE r.type = 'CUSTOM' AND r.enabled = true ORDER BY r.name")
+    List<RoleEntity> findCustomRoles();
 
     /**
-     * 减少角色用户计数
+     * 获取角色统计信息
      */
-    @Query("UPDATE RoleEntity r SET r.userCount = GREATEST(0, r.userCount - 1) WHERE r.id = :roleId")
-    void decrementUserCount(@Param("roleId") String roleId);
+    @Query("SELECT new map(" +
+           "COUNT(r) as totalRoles, " +
+           "COUNT(CASE WHEN r.type = 'SYSTEM' THEN 1 END) as systemRoles, " +
+           "COUNT(CASE WHEN r.type = 'CUSTOM' THEN 1 END) as customRoles, " +
+           "COUNT(CASE WHEN r.enabled = true THEN 1 END) as enabledRoles" +
+           ") FROM RoleEntity r")
+    List<Object> getRoleStatistics();
 }

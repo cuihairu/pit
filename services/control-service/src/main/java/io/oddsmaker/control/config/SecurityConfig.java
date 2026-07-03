@@ -1,14 +1,21 @@
 package io.oddsmaker.control.config;
 
+import io.oddsmaker.control.security.AdminTokenFilter;
+import io.oddsmaker.control.security.KeycloakJwtAuthenticationConverter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.security.web.header.writers.XXssProtectionHeaderWriter;
 import org.springframework.web.cors.CorsConfiguration;
@@ -16,16 +23,21 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.Arrays;
-import java.util.List;
 
 /**
  * 安全配置
- * 提供全面的安全防护措施
+ * 支持Keycloak OAuth2认证和Admin Token认证
  */
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity(prePostEnabled = true)
 public class SecurityConfig {
+
+    @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri:}")
+    private String jwtIssuerUri;
+
+    @Value("${spring.security.oauth2.resourceserver.jwt.jwk-set-uri:}")
+    private String jwkSetUri;
 
     /**
      * 公开端点列表（不需要认证）
@@ -56,8 +68,12 @@ public class SecurityConfig {
         return new BCryptPasswordEncoder();
     }
 
+    /**
+     * 主安全过滤器链 - 支持OAuth2和Admin Token认证
+     */
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    @Order(1)
+    SecurityFilterChain securityFilterChain(HttpSecurity http, AdminTokenFilter adminTokenFilter) throws Exception {
         return http
             // CSRF配置 - 禁用（API服务使用token认证）
             .csrf(csrf -> csrf.disable())
@@ -78,6 +94,13 @@ public class SecurityConfig {
             // 登出禁用
             .logout(logout -> logout.disable())
 
+            // OAuth2资源服务器配置
+            .oauth2ResourceServer(oauth2 -> oauth2
+                .jwt(jwt -> jwt
+                    .jwtAuthenticationConverter(keycloakJwtAuthenticationConverter())
+                )
+            )
+
             // 授权配置
             .authorizeHttpRequests(auth -> auth
                 // 公开端点
@@ -87,6 +110,9 @@ public class SecurityConfig {
                 // 其他请求拒绝
                 .anyRequest().denyAll()
             )
+
+            // 添加Admin Token过滤器在OAuth2过滤器之前
+            .addFilterBefore(adminTokenFilter, UsernamePasswordAuthenticationFilter.class)
 
             // 安全头配置
             .headers(headers -> headers
@@ -131,6 +157,29 @@ public class SecurityConfig {
     }
 
     /**
+     * Keycloak JWT认证转换器
+     */
+    @Bean
+    KeycloakJwtAuthenticationConverter keycloakJwtAuthenticationConverter() {
+        return new KeycloakJwtAuthenticationConverter();
+    }
+
+    /**
+     * JWT解码器
+     */
+    @Bean
+    JwtDecoder jwtDecoder() {
+        if (jwkSetUri != null && !jwkSetUri.isEmpty()) {
+            return NimbusJwtDecoder.withJwkSetUri(jwkSetUri).build();
+        }
+        if (jwtIssuerUri != null && !jwtIssuerUri.isEmpty()) {
+            return NimbusJwtDecoder.withIssuerLocation(jwtIssuerUri).build();
+        }
+        // 如果没有配置JWT，返回一个空实现（依赖Admin Token认证）
+        return token -> null;
+    }
+
+    /**
      * CORS配置
      */
     @Bean
@@ -160,7 +209,8 @@ public class SecurityConfig {
             "Access-Control-Request-Method",
             "Access-Control-Request-Headers",
             "X-Api-Key",
-            "X-Signature"
+            "X-Signature",
+            "X-Admin-Token"
         ));
 
         // 暴露的头

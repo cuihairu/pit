@@ -5,57 +5,64 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.LocalDateTime;
-import java.util.List;
+import java.util.Set;
 
 /**
- * 权限定义：系统中所有可能的权限项
- * 权限按照资源和操作分类
+ * 权限实体
+ * 定义系统中的权限
  */
 @Entity
 @Table(name = "permissions")
 public class PermissionEntity {
 
     @Id
-    @Column(length = 32)
+    @Column(length = 100)
     public String id;
 
-    @Column(nullable = false, length = 100, unique = true)
-    public String code;  // 权限代码，如 "game.read", "event.write"
-
-    @Column(nullable = false, length = 200)
-    public String name;  // 权限名称
+    @Column(nullable = false, unique = true, length = 100)
+    public String name;
 
     @Column(length = 500)
-    public String description;  // 权限描述
+    public String description;
 
-    // 资源分类
+    /**
+     * 权限类型: API, DATA, SYSTEM
+     */
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    public Resource resource;  // 资源类型
+    @Column(name = "type", nullable = false)
+    public PermissionType type;
 
+    /**
+     * 资源类型: game, environment, api_key, experiment, risk_rule, user, system
+     */
+    @Column(name = "resource_type", length = 50)
+    public String resourceType;
+
+    /**
+     * 操作类型: CREATE, READ, UPDATE, DELETE, EXPORT, IMPORT
+     */
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    public Operation operation;  // 操作类型
+    @Column(name = "action", nullable = false)
+    public PermissionAction action;
 
-    // 权限范围
+    /**
+     * 权限范围: GLOBAL, GAME, ENVIRONMENT
+     */
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    public PermissionScope applicableScope = PermissionScope.ALL;  // 适用范围
+    @Column(name = "scope", nullable = false)
+    public PermissionScope scope;
 
-    // 分组
-    @Column(name = "category", length = 100)
-    public String category;  // 权限分类，如 "game_management", "analytics"
+    /**
+     * 是否启用
+     */
+    @Column(name = "enabled")
+    public Boolean enabled = true;
 
-    @Column(name = "display_order")
-    public Integer displayOrder = 0;  // 显示顺序
-
-    // 状态
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    public PermissionStatus status = PermissionStatus.ACTIVE;
-
-    @Column(name = "is_system")
-    public Boolean isSystem = false;  // 是否为系统权限（不可删除）
+    /**
+     * 是否系统内置权限
+     */
+    @Column(name = "system")
+    public Boolean system = false;
 
     // 时间戳
     @CreationTimestamp
@@ -66,87 +73,60 @@ public class PermissionEntity {
     @Column(name = "updated_at", nullable = false)
     public LocalDateTime updatedAt;
 
-    @Column(name = "deleted_at")
-    public LocalDateTime deletedAt;
-
-    // 关联关系
-    @ManyToMany(mappedBy = "permissions")
-    public List<RoleEntity> roles;
-
-    public enum Resource {
-        // 游戏管理
-        GAME,                    // 游戏
-        ENVIRONMENT,            // 环境
-        API_KEY,                // API密钥
-
-        // 追踪计划
-        TRACKING_PLAN,          // 追踪计划
-        EVENT_DEFINITION,       // 事件定义
-
-        // 数据管理
-        EVENTS_DATA,            // 事件数据
-        ANALYTICS,              // 分析功能
-
-        // 策略管理
-        PRIVACY_POLICY,         // 隐私策略
-        SAMPLING_POLICY,        // 采样策略
-        RATE_LIMIT_POLICY,      // 限流策略
-
-        // 用户管理
-        USER,                   // 用户
-        ROLE,                   // 角色
-        PERMISSION,             // 权限
-
-        // 系统管理
-        SYSTEM,                 // 系统配置
-        AUDIT_LOG,              // 审计日志
-        STORAGE_PROFILE         // 存储策略
+    /**
+     * 权限类型枚举
+     */
+    public enum PermissionType {
+        API,      // API访问权限
+        DATA,     // 数据访问权限
+        SYSTEM    // 系统管理权限
     }
 
-    public enum Operation {
-        READ,                   // 读取
-        WRITE,                  // 写入
-        DELETE,                 // 删除
-        ADMIN,                  // 管理
-        APPROVE,                // 审批
-        EXPORT                  // 导出
+    /**
+     * 权限操作枚举
+     */
+    public enum PermissionAction {
+        CREATE,
+        READ,
+        UPDATE,
+        DELETE,
+        EXPORT,
+        IMPORT,
+        MANAGE,
+        ADMIN
     }
 
+    /**
+     * 权限范围枚举
+     */
     public enum PermissionScope {
-        ALL,                    // 适用于所有范围
-        GLOBAL_ONLY,            // 仅全局范围
-        GAME_AND_BELOW          // 游戏及以下范围
-    }
-
-    public enum PermissionStatus {
-        ACTIVE,                 // 活跃
-        DISABLED,               // 已禁用
-        DEPRECATED              // 已弃用
+        GLOBAL,       // 全局权限
+        GAME,         // 游戏级权限
+        ENVIRONMENT   // 环境级权限
     }
 
     // 业务方法
-    public boolean isActive() {
-        return status == PermissionStatus.ACTIVE && deletedAt == null;
+    public boolean isEnabled() {
+        return enabled != null && enabled;
     }
 
-    public boolean isSystemPermission() {
-        return Boolean.TRUE.equals(isSystem);
+    public boolean isSystem() {
+        return system != null && system;
     }
 
-    public boolean isApplicableTo(PermissionScope scope) {
-        return applicableScope == PermissionScope.ALL ||
-               applicableScope == scope;
+    public boolean isGlobal() {
+        return scope == PermissionScope.GLOBAL;
     }
 
-    public boolean isReadOnly() {
-        return operation == Operation.READ;
+    public boolean isGameScoped() {
+        return scope == PermissionScope.GAME;
     }
 
-    public boolean isDestructive() {
-        return operation == Operation.DELETE || operation == Operation.ADMIN;
+    public boolean isEnvironmentScoped() {
+        return scope == PermissionScope.ENVIRONMENT;
     }
 
-    public String getFullName() {
-        return resource.name().toLowerCase() + "." + operation.name().toLowerCase();
+    public String getFullPermission() {
+        return resourceType + ":" + action.name().toLowerCase();
     }
 }

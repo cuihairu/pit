@@ -1,0 +1,428 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Oddsmaker Game Events",
+  "description": "JSON Schema for Oddsmaker game-specific events",
+  "type": "object",
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Unique event identifier (UUIDv7)"
+    },
+    "game_id": {
+      "type": "string",
+      "description": "Game identifier"
+    },
+    "environment": {
+      "type": "string",
+      "enum": ["dev", "staging", "prod"],
+      "description": "Environment"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": ["game", "progression", "business", "resource", "social", "error", "ad", "session", "user", "risk"],
+      "description": "Event type category"
+    },
+    "event_name": {
+      "type": "string",
+      "description": "Specific event name"
+    },
+    "user_id": {
+      "type": ["string", "null"],
+      "description": "User account identifier"
+    },
+    "device_id": {
+      "type": "string",
+      "description": "Device identifier"
+    },
+    "player_id": {
+      "type": ["string", "null"],
+      "description": "Player identifier"
+    },
+    "character_id": {
+      "type": ["string", "null"],
+      "description": "Character identifier"
+    },
+    "session_id": {
+      "type": ["string", "null"],
+      "description": "Session identifier"
+    },
+    "ts_client": {
+      "type": "integer",
+      "description": "Client timestamp (milliseconds since epoch)"
+    },
+    "ts_server": {
+      "type": ["integer", "null"],
+      "description": "Server timestamp (milliseconds since epoch)"
+    },
+    "platform": {
+      "type": ["string", "null"],
+      "enum": ["ios", "android", "web", "pc", "console", null],
+      "description": "Platform"
+    },
+    "app_version": {
+      "type": ["string", "null"],
+      "description": "Application version"
+    },
+    "sdk_version": {
+      "type": ["string", "null"],
+      "description": "SDK version"
+    },
+    "country": {
+      "type": ["string", "null"],
+      "description": "ISO 3166-1 alpha-2 country code"
+    },
+    "client_ip": {
+      "type": ["string", "null"],
+      "description": "Client IP address"
+    },
+    "user_agent": {
+      "type": ["string", "null"],
+      "description": "User agent string"
+    },
+    "server_id": {
+      "type": ["string", "null"],
+      "description": "Server/shard identifier"
+    },
+    "guild_id": {
+      "type": ["string", "null"],
+      "description": "Guild/clan identifier"
+    },
+    "match_id": {
+      "type": ["string", "null"],
+      "description": "Match/session identifier"
+    },
+    "game_event_type": {
+      "type": ["string", "null"],
+      "enum": [
+        "level_start", "level_complete", "level_fail",
+        "battle_start", "battle_end",
+        "quest_accept", "quest_complete",
+        "achievement_unlock",
+        "item_grant", "item_consume",
+        "currency_source", "currency_sink",
+        "ad_watch", "ad_reward",
+        "social_invite", "social_accept",
+        "error_crash", "error_exception", "error_network",
+        null
+      ],
+      "description": "Game event type"
+    },
+    "level_id": {
+      "type": ["string", "null"],
+      "description": "Level identifier"
+    },
+    "level_name": {
+      "type": ["string", "null"],
+      "description": "Level name"
+    },
+    "level_progress": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Level progress (0.0 to 1.0)"
+    },
+    "level_score": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Level score"
+    },
+    "level_time_ms": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Time spent in level (milliseconds)"
+    },
+    "level_attempts": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Number of attempts for the level"
+    },
+    "battle_id": {
+      "type": ["string", "null"],
+      "description": "Battle/match identifier"
+    },
+    "battle_mode": {
+      "type": ["string", "null"],
+      "enum": ["pvp", "pve", "ranked", "casual", "custom", null],
+      "description": "Battle mode"
+    },
+    "battle_result": {
+      "type": ["string", "null"],
+      "enum": ["win", "lose", "draw", "abandon", null],
+      "description": "Battle result"
+    },
+    "battle_duration_ms": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Battle duration (milliseconds)"
+    },
+    "battle_rank": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "Battle rank/position"
+    },
+    "battle_kills": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Number of kills in battle"
+    },
+    "battle_deaths": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Number of deaths in battle"
+    },
+    "battle_assists": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Number of assists in battle"
+    },
+    "quest_id": {
+      "type": ["string", "null"],
+      "description": "Quest identifier"
+    },
+    "quest_name": {
+      "type": ["string", "null"],
+      "description": "Quest name"
+    },
+    "quest_type": {
+      "type": ["string", "null"],
+      "enum": ["main", "side", "daily", "weekly", "achievement", null],
+      "description": "Quest type"
+    },
+    "quest_progress": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Quest progress (0.0 to 1.0)"
+    },
+    "quest_objective_current": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Current objective count"
+    },
+    "quest_objective_target": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Target objective count"
+    },
+    "achievement_id": {
+      "type": ["string", "null"],
+      "description": "Achievement identifier"
+    },
+    "achievement_name": {
+      "type": ["string", "null"],
+      "description": "Achievement name"
+    },
+    "achievement_category": {
+      "type": ["string", "null"],
+      "description": "Achievement category"
+    },
+    "achievement_points": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Achievement points"
+    },
+    "item_id": {
+      "type": ["string", "null"],
+      "description": "Item identifier"
+    },
+    "item_type": {
+      "type": ["string", "null"],
+      "description": "Item type: weapon, armor, consumable, cosmetic, etc."
+    },
+    "item_name": {
+      "type": ["string", "null"],
+      "description": "Item name"
+    },
+    "item_rarity": {
+      "type": ["string", "null"],
+      "enum": ["common", "uncommon", "rare", "epic", "legendary", null],
+      "description": "Item rarity"
+    },
+    "item_quantity": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Item quantity"
+    },
+    "item_level": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Item level"
+    },
+    "currency_type": {
+      "type": ["string", "null"],
+      "description": "Currency type: gold, gems, energy, etc."
+    },
+    "currency_amount": {
+      "type": ["number", "null"],
+      "description": "Currency amount"
+    },
+    "currency_balance": {
+      "type": ["number", "null"],
+      "description": "Currency balance after transaction"
+    },
+    "currency_source": {
+      "type": ["string", "null"],
+      "description": "Currency source: quest, battle, purchase, etc."
+    },
+    "currency_sink": {
+      "type": ["string", "null"],
+      "description": "Currency sink: purchase, upgrade, craft, etc."
+    },
+    "ad_type": {
+      "type": ["string", "null"],
+      "enum": ["rewarded", "interstitial", "banner", "native", null],
+      "description": "Ad type"
+    },
+    "ad_placement_id": {
+      "type": ["string", "null"],
+      "description": "Ad placement identifier"
+    },
+    "ad_reward_type": {
+      "type": ["string", "null"],
+      "description": "Ad reward type: currency, item, life, etc."
+    },
+    "ad_reward_amount": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Ad reward amount"
+    },
+    "ad_duration_ms": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Ad watch duration (milliseconds)"
+    },
+    "ad_completed": {
+      "type": ["boolean", "null"],
+      "description": "Whether ad was watched completely"
+    },
+    "social_action": {
+      "type": ["string", "null"],
+      "enum": ["invite", "accept", "reject", "block", "unblock", "friend_request", "friend_accept", null],
+      "description": "Social action"
+    },
+    "social_target_user_id": {
+      "type": ["string", "null"],
+      "description": "Target user ID for social action"
+    },
+    "social_target_player_id": {
+      "type": ["string", "null"],
+      "description": "Target player ID for social action"
+    },
+    "error_type": {
+      "type": ["string", "null"],
+      "enum": ["crash", "exception", "network", "timeout", "validation", null],
+      "description": "Error type"
+    },
+    "error_message": {
+      "type": ["string", "null"],
+      "description": "Error message"
+    },
+    "error_stack_trace": {
+      "type": ["string", "null"],
+      "description": "Error stack trace"
+    },
+    "error_fatal": {
+      "type": ["boolean", "null"],
+      "description": "Whether error was fatal"
+    },
+    "revenue_amount": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Revenue amount"
+    },
+    "revenue_currency": {
+      "type": ["string", "null"],
+      "description": "Revenue currency (ISO 4217 code)"
+    },
+    "order_id": {
+      "type": ["string", "null"],
+      "description": "Order/transaction identifier"
+    },
+    "product_id": {
+      "type": ["string", "null"],
+      "description": "Product/Item identifier"
+    },
+    "receipt_hash": {
+      "type": ["string", "null"],
+      "description": "Payment receipt hash for fraud detection"
+    },
+    "virtual_currency": {
+      "type": ["string", "null"],
+      "description": "Virtual currency identifier"
+    },
+    "virtual_amount": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Virtual currency amount"
+    },
+    "resource_id": {
+      "type": ["string", "null"],
+      "description": "Resource identifier"
+    },
+    "resource_amount": {
+      "type": ["number", "null"],
+      "description": "Resource amount"
+    },
+    "flow_type": {
+      "type": ["string", "null"],
+      "enum": ["source", "sink", null],
+      "description": "Resource flow type"
+    },
+    "operation_id": {
+      "type": ["string", "null"],
+      "description": "Operation identifier"
+    },
+    "operation_type": {
+      "type": ["string", "null"],
+      "description": "Operation type"
+    },
+    "ad_network": {
+      "type": ["string", "null"],
+      "description": "Ad network identifier"
+    },
+    "ad_placement": {
+      "type": ["string", "null"],
+      "description": "Ad placement identifier"
+    },
+    "ad_format": {
+      "type": ["string", "null"],
+      "description": "Ad format"
+    },
+    "ad_impression_id": {
+      "type": ["string", "null"],
+      "description": "Ad impression identifier"
+    },
+    "risk_context": {
+      "type": ["string", "null"],
+      "description": "Serialized risk context"
+    },
+    "device_fingerprint": {
+      "type": ["string", "null"],
+      "description": "Device fingerprint for risk control"
+    },
+    "client_integrity": {
+      "type": ["string", "null"],
+      "description": "Client integrity signal"
+    },
+    "experiments": {
+      "type": ["object", "null"],
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Active experiments and variants"
+    },
+    "props": {
+      "type": ["object", "null"],
+      "description": "Additional properties"
+    }
+  },
+  "required": [
+    "event_id",
+    "game_id",
+    "environment",
+    "event_name",
+    "device_id",
+    "ts_client"
+  ],
+  "additionalProperties": false
+}

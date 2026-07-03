@@ -1,0 +1,412 @@
+package io.oddsmaker.jobs.funnels;
+
+import io.oddsmaker.jobs.enrich.ApicurioAvroFlinkDeserializer;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.flink.api.common.eventtime.SerializableTimestampAssigner;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.state.MapState;
+import org.apache.flink.api.common.state.MapStateDescriptor;
+import org.apache.flink.api.common.state.StateTtlConfig;
+import org.apache.flink.api.common.time.Time;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.connector.jdbc.JdbcConnectionOptions;
+import org.apache.flink.connector.jdbc.JdbcExecutionOptions;
+import org.apache.flink.connector.jdbc.JdbcSink;
+import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
+import org.apache.flink.util.Collector;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.time.Duration;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * 可配置漏斗Flink作业
+ * 支持多步骤漏斗分析，从数据库读取漏斗配置
+ */
+public class ConfigurableFunnelsJob {
+    
+    public static void main(String[] args) throws Exception {
+        String bootstrap = System.getProperty("kafka.bootstrap", "localhost:9092");
+        String registry = System.getProperty("registry.url", "http://localhost:8081/apis/registry/v2");
+        String topic = System.getProperty("kafka.topic", "oddsmaker.events_raw");
+        String chUrl = System.getProperty("clickhouse.url", "jdbc:clickhouse://localhost:8123/default");
+        String chUser = System.getProperty("clickhouse.user", "default");
+        String chPass = System.getProperty("clickhouse.pass", "");
+        String controlDbUrl = System.getProperty("control.db.url", "jdbc:postgresql://localhost:5432/oddsmaker");
+        String controlDbUser = System.getProperty("control.db.user", "oddsmaker");
+        String controlDbPass = System.getProperty("control.db.pass", "oddsmaker");
+        
+        // 从控制面数据库加载漏斗配置
+        List<FunnelConfig> funnelConfigs = loadFunnelConfigs(controlDbUrl, controlDbUser, controlDbPass);
+        
+        if (funnelConfigs.isEmpty()) {
+            System.out.println("No funnel configurations found. Exiting.");
+            return;
+        }
+        
+        System.out.println("Loaded " + funnelConfigs.size() + " funnel configurations");
+        
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        
+        KafkaSource<GenericRecord> source = KafkaSource.<GenericRecord>builder()
+                .setBootstrapServers(bootstrap)
+                .setTopics(topic)
+                .setGroupId("oddsmaker-configurable-funnels")
+                .setStartingOffsets(OffsetsInitializer.latest())
+                .setDeserializer(new ApicurioAvroFlinkDeserializer(registry))
+                .build();
+        
+        var wm = WatermarkStrategy.<GenericRecord>forBoundedOutOfOrderness(Duration.ofMinutes(10))
+                .withTimestampAssigner((SerializableTimestampAssigner<GenericRecord>) (element, recordTimestamp) -> {
+                    Long tsServer = (Long) element.get("ts_server");
+                    Long tsClient = (Long) element.get("ts_client");
+                    long micros = tsServer != null ? tsServer : (tsClient != null ? tsClient : System.currentTimeMillis() * 1000L);
+                    return micros / 1000L;
+                });
+        
+        DataStream<GenericRecord> stream = env.fromSource(source, wm, "events-raw");
+        
+        // 为每个漏斗配置创建处理链路
+        for (FunnelConfig config : funnelConfigs) {
+            if (!config.enabled) {
+                System.out.println("Skipping disabled funnel: " + config.name);
+                continue;
+            }
+            
+            System.out.println("Processing funnel: " + config.name + " with " + config.steps.size() + " steps");
+            
+            // 收集所有步骤的事件名称
+            List<String> stepEvents = config.steps.stream()
+                .map(step -> step.eventName)
+                .toList();
+            
+            // 过滤相关事件
+            DataStream<GenericRecord> filteredStream = stream
+                .filter(r -> {
+                    Object n = r.get("event_name");
+                    if (n == null) return false;
+                    String ev = n.toString();
+                    return stepEvents.contains(ev);
+                });
+            
+            // 按用户键分组并处理漏斗
+            filteredStream
+                .keyBy(r -> (r.get("game_id") + "|" + r.get("environment") + "|" + uidOf(r)))
+                .process(new ConfigurableFunnelProcess(config))
+                .addSink(JdbcSink.sink(
+                    "INSERT INTO funnels_configurable (game_id, environment, funnel_id, event_date, step, step_name, users, conversion_rate) VALUES (?,?,?,?,?,?,?,?)",
+                    (ps, row) -> {
+                        ps.setString(1, row.gameId);
+                        ps.setString(2, row.environment);
+                        ps.setString(3, row.funnelId);
+                        ps.setDate(4, new java.sql.Date(row.eventDateEpochDay * 24 * 3600 * 1000));
+                        ps.setInt(5, row.step);
+                        ps.setString(6, row.stepName);
+                        ps.setLong(7, row.users);
+                        ps.setDouble(8, row.conversionRate);
+                    },
+                    JdbcExecutionOptions.builder().withBatchIntervalMs(1000).withBatchSize(2000).withMaxRetries(3).build(),
+                    new JdbcConnectionOptions.JdbcConnectionOptionsBuilder()
+                        .withUrl(chUrl).withDriverName("com.clickhouse.jdbc.ClickHouseDriver")
+                        .withUsername(chUser).withPassword(chPass).build()
+                ));
+        }
+        
+        env.execute("oddsmaker-configurable-funnels");
+    }
+    
+    /**
+     * 从控制面数据库加载漏斗配置
+     */
+    private static List<FunnelConfig> loadFunnelConfigs(String dbUrl, String dbUser, String dbPass) {
+        List<FunnelConfig> configs = new ArrayList<>();
+        
+        try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPass)) {
+            // 查询启用的漏斗配置
+            String sql = "SELECT f.id, f.game_id, f.name, f.type, f.user_key, f.time_window_sec " +
+                        "FROM funnel_configs f " +
+                        "WHERE f.enabled = true AND f.deleted_at IS NULL";
+            
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ResultSet rs = ps.executeQuery();
+                
+                while (rs.next()) {
+                    FunnelConfig config = new FunnelConfig();
+                    config.id = rs.getString("id");
+                    config.gameId = rs.getString("game_id");
+                    config.name = rs.getString("name");
+                    config.type = rs.getString("type");
+                    config.userKey = rs.getString("user_key");
+                    config.timeWindowSec = rs.getLong("time_window_sec");
+                    config.enabled = true;
+                    
+                    // 加载漏斗步骤
+                    config.steps = loadFunnelSteps(conn, config.id);
+                    
+                    configs.add(config);
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to load funnel configs: " + e.getMessage());
+            e.printStackTrace();
+        }
+        
+        return configs;
+    }
+    
+    /**
+     * 加载漏斗步骤
+     */
+    private static List<FunnelStep> loadFunnelSteps(Connection conn, String funnelId) throws Exception {
+        List<FunnelStep> steps = new ArrayList<>();
+        
+        String sql = "SELECT id, step_order, name, event_name, event_filter, time_window_sec, optional " +
+                    "FROM funnel_steps " +
+                    "WHERE funnel_id = ? " +
+                    "ORDER BY step_order ASC";
+        
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, funnelId);
+            ResultSet rs = ps.executeQuery();
+            
+            while (rs.next()) {
+                FunnelStep step = new FunnelStep();
+                step.id = rs.getLong("id");
+                step.stepOrder = rs.getInt("step_order");
+                step.name = rs.getString("name");
+                step.eventName = rs.getString("event_name");
+                step.eventFilter = rs.getString("event_filter");
+                step.timeWindowSec = rs.getLong("time_window_sec");
+                step.optional = rs.getBoolean("optional");
+                
+                steps.add(step);
+            }
+        }
+        
+        return steps;
+    }
+    
+    /**
+     * 获取用户标识
+     */
+    static String uidOf(GenericRecord r) {
+        Object u = r.get("user_id");
+        if (u != null && !u.toString().isEmpty()) return u.toString();
+        return String.valueOf(r.get("device_id"));
+    }
+    
+    /**
+     * 漏斗配置
+     */
+    static class FunnelConfig {
+        String id;
+        String gameId;
+        String name;
+        String type;
+        String userKey;
+        long timeWindowSec;
+        boolean enabled;
+        List<FunnelStep> steps;
+    }
+    
+    /**
+     * 漏斗步骤
+     */
+    static class FunnelStep {
+        long id;
+        int stepOrder;
+        String name;
+        String eventName;
+        String eventFilter;
+        long timeWindowSec;
+        boolean optional;
+    }
+    
+    /**
+     * 漏斗结果行
+     */
+    static class FunnelRow {
+        String gameId;
+        String environment;
+        String funnelId;
+        long eventDateEpochDay;
+        int step;
+        String stepName;
+        long users;
+        double conversionRate;
+    }
+    
+    /**
+     * 可配置漏斗处理函数
+     */
+    static class ConfigurableFunnelProcess extends KeyedProcessFunction<String, GenericRecord, FunnelRow> {
+        private final FunnelConfig config;
+        private transient MapState<String, Long> state;
+        
+        public ConfigurableFunnelProcess(FunnelConfig config) {
+            this.config = config;
+        }
+        
+        @Override
+        public void open(org.apache.flink.configuration.Configuration parameters) {
+            StateTtlConfig ttl = StateTtlConfig.newBuilder(Time.days(40)).build();
+            MapStateDescriptor<String, Long> desc = new MapStateDescriptor<>(
+                "funnel_state_" + config.id, 
+                TypeInformation.of(String.class), 
+                TypeInformation.of(Long.class)
+            );
+            desc.enableTimeToLive(ttl);
+            state = getRuntimeContext().getMapState(desc);
+        }
+        
+        @Override
+        public void processElement(GenericRecord value, Context ctx, Collector<FunnelRow> out) throws Exception {
+            String gameId = value.get("game_id").toString();
+            String environment = value.get("environment").toString();
+            String eventName = value.get("event_name").toString();
+            long ts = tsMs(value);
+            long day = ts / 86_400_000L;
+            
+            // 查找当前事件对应的步骤
+            int currentStepIndex = -1;
+            for (int i = 0; i < config.steps.size(); i++) {
+                if (config.steps.get(i).eventName.equals(eventName)) {
+                    currentStepIndex = i;
+                    break;
+                }
+            }
+            
+            if (currentStepIndex < 0) {
+                return;
+            }
+            
+            FunnelStep currentStep = config.steps.get(currentStepIndex);
+            
+            // 检查是否为第一步
+            if (currentStepIndex == 0) {
+                // 记录第一步开始
+                String key = "started_day_" + day;
+                Long seen = state.get(key);
+                if (seen == null) {
+                    state.put(key, 1L);
+                    
+                    FunnelRow row = new FunnelRow();
+                    row.gameId = gameId;
+                    row.environment = environment;
+                    row.funnelId = config.id;
+                    row.eventDateEpochDay = day;
+                    row.step = 1;
+                    row.stepName = currentStep.name;
+                    row.users = 1;
+                    row.conversionRate = 100.0;
+                    
+                    out.collect(row);
+                }
+                
+                // 记录第一步时间戳
+                state.put("step_0_ts", ts);
+            } else {
+                // 检查前一步是否完成
+                int prevStepIndex = currentStepIndex - 1;
+                FunnelStep prevStep = config.steps.get(prevStepIndex);
+                
+                Long prevTs = state.get("step_" + prevStepIndex + "_ts");
+                if (prevTs != null) {
+                    // 检查时间窗口
+                    long timeWindow = currentStep.timeWindowSec > 0 ? 
+                        currentStep.timeWindowSec * 1000 : 
+                        (config.timeWindowSec > 0 ? config.timeWindowSec * 1000 : 24 * 3600 * 1000);
+                    
+                    if (ts - prevTs <= timeWindow) {
+                        // 记录当前步骤完成
+                        String key = "step_" + currentStepIndex + "_day_" + day;
+                        Long seen = state.get(key);
+                        if (seen == null) {
+                            state.put(key, 1L);
+                            
+                            // 计算转化率
+                            String startedKey = "started_day_" + day;
+                            Long started = state.get(startedKey);
+                            long startedCount = started != null ? started : 0;
+                            double conversionRate = startedCount > 0 ? 
+                                (1.0 / startedCount) * 100.0 : 0.0;
+                            
+                            FunnelRow row = new FunnelRow();
+                            row.gameId = gameId;
+                            row.environment = environment;
+                            row.funnelId = config.id;
+                            row.eventDateEpochDay = day;
+                            row.step = currentStepIndex + 1;
+                            row.stepName = currentStep.name;
+                            row.users = 1;
+                            row.conversionRate = conversionRate;
+                            
+                            out.collect(row);
+                        }
+                        
+                        // 记录当前步骤时间戳
+                        state.put("step_" + currentStepIndex + "_ts", ts);
+                    }
+                } else if (currentStep.optional) {
+                    // 如果当前步骤是可选的，检查前几步
+                    for (int i = prevStepIndex - 1; i >= 0; i--) {
+                        Long prevPrevTs = state.get("step_" + i + "_ts");
+                        if (prevPrevTs != null) {
+                            long timeWindow = currentStep.timeWindowSec > 0 ? 
+                                currentStep.timeWindowSec * 1000 : 
+                                (config.timeWindowSec > 0 ? config.timeWindowSec * 1000 : 24 * 3600 * 1000);
+                            
+                            if (ts - prevPrevTs <= timeWindow) {
+                                // 记录当前步骤完成
+                                String key = "step_" + currentStepIndex + "_day_" + day;
+                                Long seen = state.get(key);
+                                if (seen == null) {
+                                    state.put(key, 1L);
+                                    
+                                    // 计算转化率
+                                    String startedKey = "started_day_" + day;
+                                    Long started = state.get(startedKey);
+                                    long startedCount = started != null ? started : 0;
+                                    double conversionRate = startedCount > 0 ? 
+                                        (1.0 / startedCount) * 100.0 : 0.0;
+                                    
+                                    FunnelRow row = new FunnelRow();
+                                    row.gameId = gameId;
+                                    row.environment = environment;
+                                    row.funnelId = config.id;
+                                    row.eventDateEpochDay = day;
+                                    row.step = currentStepIndex + 1;
+                                    row.stepName = currentStep.name;
+                                    row.users = 1;
+                                    row.conversionRate = conversionRate;
+                                    
+                                    out.collect(row);
+                                }
+                                
+                                // 记录当前步骤时间戳
+                                state.put("step_" + currentStepIndex + "_ts", ts);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        private long tsMs(GenericRecord r) {
+            Long tsServer = (Long) r.get("ts_server");
+            Long tsClient = (Long) r.get("ts_client");
+            long micros = tsServer != null ? tsServer : (tsClient != null ? tsClient : System.currentTimeMillis() * 1000L);
+            return micros / 1000L;
+        }
+    }
+}

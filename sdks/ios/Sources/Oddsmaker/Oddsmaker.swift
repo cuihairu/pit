@@ -13,6 +13,15 @@ public struct OddsmakerOptions {
     public var maxQueueBytes: Int = 512_000
     public var sessionGapSec: TimeInterval = 30 * 60
     public var debug: Bool = false
+    
+    // HMAC配置
+    public var hmacSecret: String?
+    public var hmacAlgorithm: HMACManager.Algorithm = .sha256
+    public var enableHMAC: Bool = false
+    
+    // 错误处理配置
+    public var logLevel: ErrorHandler.LogLevel = .warning
+    public var onError: ((OddsmakerError) -> Void)?
 
     public init(apiKey: String, endpoint: URL, gameId: String, environment: String) {
         self.apiKey = apiKey
@@ -38,6 +47,11 @@ public final class Oddsmaker {
     private var queue: [Event] = []
     private var queueBytes: Int = 0
     private let queueLock = NSLock()
+    
+    // 管理器
+    private var cacheManager: CacheManager?
+    private var hmacManager: HMACManager?
+    private var errorHandler: ErrorHandler?
 
     private var queuePath: URL {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -47,11 +61,26 @@ public final class Oddsmaker {
 
     public func initSDK(_ options: OddsmakerOptions) {
         self.opts = options
+        
+        // 初始化管理器
+        self.cacheManager = CacheManager()
+        self.errorHandler = ErrorHandler(
+            logLevel: options.debug ? .debug : options.logLevel,
+            errorCallback: options.onError
+        )
+        
+        // 初始化HMAC管理器
+        if options.enableHMAC, let secret = options.hmacSecret {
+            self.hmacManager = HMACManager(secret: secret, algorithm: options.hmacAlgorithm)
+        }
+        
         self.deviceId = options.deviceId ?? Self.loadOrCreateDeviceId(gameId: options.gameId, environment: options.environment)
         self.restoreQueue()
         self.lastActive = Date().timeIntervalSince1970
         self.ensureTimer()
-        if options.debug { print("[Oddsmaker] init deviceId=\(deviceId) queued=\(queue.count)") }
+        
+        errorHandler?.info("SDK initialized with deviceId=\(deviceId) queued=\(queue.count)")
+        
         NotificationCenter.default.addObserver(self, selector: #selector(appDidEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(appWillEnterForeground), name: UIApplication.willEnterForegroundNotification, object: nil)
     }
@@ -135,16 +164,32 @@ public final class Oddsmaker {
         req.setValue(o.apiKey, forHTTPHeaderField: "x-api-key")
         req.setValue("application/x-ndjson", forHTTPHeaderField: "content-type")
 
-        req.httpBody = Data(ndjson.utf8)
+        let body = Data(ndjson.utf8)
+        req.httpBody = body
+        
+        // 添加HMAC签名
+        if let hmac = hmacManager {
+            req = hmac.signRequest(req, body: body)
+        }
 
         let sem = DispatchSemaphore(value: 0)
         var success = false
+        var lastError: Error?
+        
         URLSession.shared.dataTask(with: req) { _, resp, err in
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             success = err == nil && (200..<300).contains(code)
-            if self.opts?.debug == true {
-                print("[Oddsmaker] flush code=\(code) count=\(slice.count)")
+            
+            if let error = err {
+                lastError = error
+                self.errorHandler?.error("Flush failed with error: \(error.localizedDescription)")
+            } else if !(200..<300).contains(code) {
+                lastError = OddsmakerError.invalidResponse(statusCode: code, message: "Flush failed")
+                self.errorHandler?.error("Flush failed with status code: \(code)")
+            } else {
+                self.errorHandler?.debug("Flush successful, count=\(slice.count)")
             }
+            
             sem.signal()
         }.resume()
         _ = sem.wait(timeout: .now() + 15)
@@ -154,6 +199,10 @@ public final class Oddsmaker {
             recalcQueueBytesNoLock()
             persistQueueNoLock()
             queueLock.unlock()
+            
+            if let error = lastError {
+                errorHandler?.handle(error)
+            }
         }
     }
 
@@ -456,8 +505,28 @@ public final class Oddsmaker {
         var req = URLRequest(url: u)
         req.httpMethod = "GET"
         req.setValue("application/json", forHTTPHeaderField: "accept")
-        URLSession.shared.dataTask(with: req) { data, _, err in
-            if let e = err { completion(.failure(e)); return }
+        
+        // 添加HMAC签名
+        if let hmac = hmacManager {
+            req = hmac.signRequest(req, body: nil)
+        }
+        
+        URLSession.shared.dataTask(with: req) { data, resp, err in
+            if let error = err {
+                self.errorHandler?.error("Failed to fetch experiments: \(error.localizedDescription)")
+                completion(.failure(OddsmakerError.networkError(error)))
+                return
+            }
+            
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if !(200..<300).contains(code) {
+                let message = String(data: data ?? Data(), encoding: .utf8)
+                self.errorHandler?.error("Failed to fetch experiments with status code: \(code)")
+                completion(.failure(OddsmakerError.invalidResponse(statusCode: code, message: message)))
+                return
+            }
+            
+            self.errorHandler?.debug("Experiments fetched successfully")
             completion(.success(data ?? Data()))
         }.resume()
     }

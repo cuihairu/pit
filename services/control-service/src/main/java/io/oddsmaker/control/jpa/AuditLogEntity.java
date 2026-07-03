@@ -6,193 +6,235 @@ import org.hibernate.annotations.CreationTimestamp;
 import java.time.LocalDateTime;
 
 /**
- * 审计日志：记录系统中的所有重要操作
- * 用于安全审计、合规检查和问题排查
+ * 审计日志实体
+ * 记录所有敏感操作
  */
 @Entity
 @Table(name = "audit_logs")
 public class AuditLogEntity {
 
     @Id
-    @Column(length = 32)
-    public String id;
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    public Long id;
 
-    // 操作者信息
-    @Column(name = "user_id", length = 32)
-    public String userId;  // 操作人ID
+    /**
+     * 操作用户ID
+     */
+    @Column(name = "user_id", length = 64)
+    public String userId;
 
-    @Column(name = "user_name", length = 100)
-    public String userName;  // 操作人名称
+    /**
+     * 操作用户名
+     */
+    @Column(name = "username", length = 100)
+    public String username;
 
-    @Column(name = "user_email", length = 200)
-    public String userEmail;  // 操作人邮箱
-
-    // 操作信息
+    /**
+     * 操作类型: CREATE, READ, UPDATE, DELETE, LOGIN, LOGOUT, EXPORT, IMPORT
+     */
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    public AuditAction action;  // 操作类型
+    @Column(name = "action", nullable = false, length = 50)
+    public AuditAction action;
 
-    @Column(name = "resource_type", nullable = false, length = 100)
-    public String resourceType;  // 资源类型：game, environment, api_key等
+    /**
+     * 资源类型: game, environment, api_key, experiment, risk_rule, user, system
+     */
+    @Column(name = "resource_type", nullable = false, length = 50)
+    public String resourceType;
 
-    @Column(name = "resource_id", length = 32)
-    public String resourceId;  // 资源ID
+    /**
+     * 资源ID
+     */
+    @Column(name = "resource_id", length = 64)
+    public String resourceId;
 
+    /**
+     * 资源名称
+     */
     @Column(name = "resource_name", length = 200)
-    public String resourceName;  // 资源名称（用于快速查看）
+    public String resourceName;
 
-    // 操作范围
-    @Column(name = "scope_game_id", length = 32)
-    public String scopeGameId;  // 操作涉及的游戏ID
+    /**
+     * 操作详情（JSON格式）
+     */
+    @Column(name = "details", columnDefinition = "TEXT")
+    public String details;
 
-    @Column(name = "scope_environment_id", length = 32)
-    public String scopeEnvironmentId;  // 操作涉及的环境ID
+    /**
+     * 旧值（JSON格式）
+     */
+    @Column(name = "old_value", columnDefinition = "TEXT")
+    public String oldValue;
 
-    // 操作详情
-    @Column(name = "action_description", length = 500)
-    public String actionDescription;  // 操作描述
+    /**
+     * 新值（JSON格式）
+     */
+    @Column(name = "new_value", columnDefinition = "TEXT")
+    public String newValue;
 
-    @Column(name = "changes", columnDefinition = "TEXT")
-    public String changes;  // 变更内容（JSON格式）
-
-    // 请求信息
-    @Column(name = "request_id", length = 64)
-    public String requestId;  // 请求ID（用于关联）
-
-    @Column(name = "request_method", length = 10)
-    public String requestMethod;  // HTTP方法
-
-    @Column(name = "request_path", length = 500)
-    public String requestPath;  // 请求路径
-
-    // 客户端信息
-    @Column(name = "client_ip", length = 50)
-    public String clientIp;  // 客户端IP
-
-    @Column(name = "user_agent", length = 500)
-    public String userAgent;  // 用户代理
-
-    // 结果
+    /**
+     * 操作状态: SUCCESS, FAILURE, PARTIAL
+     */
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    public AuditResult result = AuditResult.SUCCESS;  // 操作结果
+    @Column(name = "status", nullable = false)
+    public AuditStatus status = AuditStatus.SUCCESS;
 
-    @Column(name = "error_message", length = 1000)
-    public String errorMessage;  // 错误信息
+    /**
+     * 错误信息
+     */
+    @Column(name = "error_message", columnDefinition = "TEXT")
+    public String errorMessage;
 
-    // 时间戳
+    /**
+     * 客户端IP地址
+     */
+    @Column(name = "ip_address", length = 45)
+    public String ipAddress;
+
+    /**
+     * 用户代理
+     */
+    @Column(name = "user_agent", length = 500)
+    public String userAgent;
+
+    /**
+     * 请求ID
+     */
+    @Column(name = "request_id", length = 100)
+    public String requestId;
+
+    /**
+     * 会话ID
+     */
+    @Column(name = "session_id", length = 100)
+    public String sessionId;
+
+    /**
+     * 操作耗时（毫秒）
+     */
+    @Column(name = "duration_ms")
+    public Long durationMs;
+
+    /**
+     * 游戏ID（如果适用）
+     */
+    @Column(name = "game_id", length = 32)
+    public String gameId;
+
+    /**
+     * 环境（如果适用）
+     */
+    @Column(name = "environment", length = 20)
+    public String environment;
+
+    /**
+     * 审计日志创建时间
+     */
     @CreationTimestamp
-    @Column(name = "created_at", nullable = false)
+    @Column(name = "created_at", nullable = false, updatable = false)
     public LocalDateTime createdAt;
 
-    // TTL（数据保留）
-    @Column(name = "expire_at")
-    public LocalDateTime expireAt;  // 过期时间（用于自动清理）
-
-    @Column(name = "alerted")
-    public Boolean alerted = false;  // 是否已发送告警
-
+    /**
+     * 操作类型枚举
+     */
     public enum AuditAction {
-        // 资源操作
-        CREATE,                 // 创建
-        READ,                   // 读取
-        UPDATE,                 // 更新
-        DELETE,                 // 删除
-        RESTORE,                // 恢复
-
-        // 状态变更
-        ACTIVATE,               // 激活
-        DEACTIVATE,             // 停用
-        ARCHIVE,                // 归档
-
+        // CRUD操作
+        CREATE,
+        READ,
+        UPDATE,
+        DELETE,
+        
+        // 认证操作
+        LOGIN,
+        LOGOUT,
+        LOGIN_FAILED,
+        PASSWORD_CHANGE,
+        PASSWORD_RESET,
+        
+        // 数据操作
+        EXPORT,
+        IMPORT,
+        ARCHIVE,
+        RESTORE,
+        
+        // 配置操作
+        CONFIGURE,
+        ENABLE,
+        DISABLE,
+        
         // 权限操作
-        GRANT,                  // 授权
-        REVOKE,                 // 撤销
-        INVITE,                 // 邀请
-        ACCEPT_INVITE,          // 接受邀请
-
-        // 敏感操作
-        LOGIN,                  // 登录
-        LOGOUT,                 // 登出
-        PASSWORD_CHANGE,        // 修改密码
-        API_KEY_GENERATE,       // 生成API密钥
-        API_KEY_REVEAL,         // 查看API密钥
-        EXPORT_DATA,            // 导出数据
-        BULK_DELETE,            // 批量删除
-
-        // 配置变更
-        CONFIG_CHANGE,          // 配置变更
-        POLICY_CHANGE,          // 策略变更
-        SCHEMA_CHANGE,          // 模式变更
-
-        // 安全相关
-        SECURITY_ALERT,         // 安全告警
-        SECURITY_EVENT,         // 安全事件
-        RATE_LIMIT_EXCEEDED,    // 超过限流
-        UNAUTHORIZED_ACCESS,    // 未授权访问
-        SUSPICIOUS_ACTIVITY,    // 可疑活动
-        BLOCK,                  // 封禁/阻止
-        UNBLOCK,                // 解除封禁
-
-        // 集成相关
-        INTEGRATION_CALL,       // 集成调用
-
+        GRANT_ROLE,
+        REVOKE_ROLE,
+        GRANT_PERMISSION,
+        REVOKE_PERMISSION,
+        
         // 系统操作
-        DISABLE                 // 禁用
+        SYSTEM_BACKUP,
+        SYSTEM_RESTORE,
+        SYSTEM_MAINTENANCE
     }
 
-    public enum AuditResult {
-        SUCCESS,                // 成功
-        FAILURE,                // 失败
-        PARTIAL,                // 部分成功
-        BLOCKED,                // 已阻止
-        ERROR                   // 错误
+    /**
+     * 审计状态枚举
+     */
+    public enum AuditStatus {
+        SUCCESS,
+        FAILURE,
+        PARTIAL,
+        DENIED
     }
 
     // 业务方法
     public boolean isSuccess() {
-        return result == AuditResult.SUCCESS;
+        return status == AuditStatus.SUCCESS;
     }
 
     public boolean isFailure() {
-        return result == AuditResult.FAILURE || result == AuditResult.ERROR;
+        return status == AuditStatus.FAILURE;
     }
 
-    public boolean isBlocked() {
-        return result == AuditResult.BLOCKED;
-    }
-
-    public boolean isSensitiveAction() {
-        return action == AuditAction.API_KEY_REVEAL ||
+    public boolean isAuthAction() {
+        return action == AuditAction.LOGIN ||
+               action == AuditAction.LOGOUT ||
+               action == AuditAction.LOGIN_FAILED ||
                action == AuditAction.PASSWORD_CHANGE ||
+               action == AuditAction.PASSWORD_RESET;
+    }
+
+    public boolean isDataAction() {
+        return action == AuditAction.CREATE ||
+               action == AuditAction.UPDATE ||
                action == AuditAction.DELETE ||
-               action == AuditAction.BULK_DELETE ||
-               action == AuditAction.GRANT ||
-               action == AuditAction.REVOKE;
+               action == AuditAction.EXPORT ||
+               action == AuditAction.IMPORT;
     }
 
-    public boolean isSecurityEvent() {
-        return action == AuditAction.SECURITY_ALERT ||
-               action == AuditAction.RATE_LIMIT_EXCEEDED ||
-               action == AuditAction.UNAUTHORIZED_ACCESS ||
-               action == AuditAction.SUSPICIOUS_ACTIVITY;
-    }
-
-    public boolean requiresImmediateAlert() {
-        return isSecurityEvent() ||
-               (isFailure() && isSensitiveAction());
-    }
-
-    public String getFullDescription() {
-        StringBuilder sb = new StringBuilder();
-        sb.append(action.name().toLowerCase());
-        sb.append(" ").append(resourceType.toLowerCase());
-        if (resourceName != null) {
-            sb.append(" (").append(resourceName).append(")");
+    public String getActionDescription() {
+        switch (action) {
+            case CREATE: return "创建";
+            case READ: return "读取";
+            case UPDATE: return "更新";
+            case DELETE: return "删除";
+            case LOGIN: return "登录";
+            case LOGOUT: return "登出";
+            case LOGIN_FAILED: return "登录失败";
+            case PASSWORD_CHANGE: return "修改密码";
+            case PASSWORD_RESET: return "重置密码";
+            case EXPORT: return "导出";
+            case IMPORT: return "导入";
+            case ARCHIVE: return "归档";
+            case RESTORE: return "恢复";
+            case CONFIGURE: return "配置";
+            case ENABLE: return "启用";
+            case DISABLE: return "禁用";
+            case GRANT_ROLE: return "授予角色";
+            case REVOKE_ROLE: return "撤销角色";
+            case GRANT_PERMISSION: return "授予权限";
+            case REVOKE_PERMISSION: return "撤销权限";
+            case SYSTEM_BACKUP: return "系统备份";
+            case SYSTEM_RESTORE: return "系统恢复";
+            case SYSTEM_MAINTENANCE: return "系统维护";
+            default: return action.toString();
         }
-        if (actionDescription != null) {
-            sb.append(": ").append(actionDescription);
-        }
-        return sb.toString();
     }
 }

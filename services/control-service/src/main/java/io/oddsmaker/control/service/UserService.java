@@ -1,7 +1,9 @@
 package io.oddsmaker.control.service;
 
-import io.oddsmaker.control.dto.UserDTO;
-import io.oddsmaker.control.jpa.*;
+import io.oddsmaker.control.jpa.UserEntity;
+import io.oddsmaker.control.jpa.UserRepo;
+import io.oddsmaker.control.jpa.AuditLogEntity;
+import io.oddsmaker.control.jpa.AuditLogRepo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,11 +15,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
- * 用户权限管理服务
- * 提供完整的用户生命周期和权限管理功能
+ * 用户管理服务
+ * 提供用户生命周期管理
  */
 @Service
 @Transactional
@@ -29,384 +30,360 @@ public class UserService {
     private UserRepo userRepo;
 
     @Autowired
-    private UserRoleRepo userRoleRepo;
-
-    @Autowired
-    private GameRepo gameRepo;
-
-    @Autowired
-    private GameEnvironmentRepo gameEnvironmentRepo;
+    private AuditLogRepo auditLogRepo;
 
     @Autowired
     private PasswordEncoder passwordEncoder;
 
     /**
-     * 创建新用户
+     * 创建用户
      */
-    public UserDTO createUser(UserDTO dto, String password) {
-        logger.info("Creating user: {}", dto.email);
+    public UserEntity createUser(UserEntity user, String operatorId) {
+        logger.info("Creating user: {}", user.username);
+
+        // 检查用户名是否已存在
+        if (userRepo.existsByUsername(user.username)) {
+            throw new IllegalArgumentException("Username already exists: " + user.username);
+        }
 
         // 检查邮箱是否已存在
-        if (userRepo.findByEmailAndDeletedAtIsNull(dto.email).isPresent()) {
-            throw new IllegalArgumentException("Email already exists: " + dto.email);
+        if (user.email != null && userRepo.existsByEmail(user.email)) {
+            throw new IllegalArgumentException("Email already exists: " + user.email);
         }
 
-        // 生成唯一ID
-        if (dto.id == null || dto.id.trim().isEmpty()) {
-            dto.id = "user_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        // 生成ID
+        if (user.id == null || user.id.trim().isEmpty()) {
+            user.id = "user_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         }
 
-        // 设置默认值
-        if (dto.globalRole == null) {
-            dto.globalRole = UserEntity.GlobalRole.USER;
+        // 设置默认状态
+        if (user.status == null) {
+            user.status = UserEntity.UserStatus.ACTIVE;
         }
 
-        // 转换并保存
-        UserEntity entity = dto.toEntity();
-        if (password != null && !password.trim().isEmpty()) {
-            entity.passwordHash = passwordEncoder.encode(password);
+        // 设置默认角色
+        if (user.roles == null || user.roles.isEmpty()) {
+            user.roles = Set.of(UserEntity.UserRole.VIEWER);
         }
 
-        // 生成邮箱验证令牌
-        entity.emailVerificationToken = UUID.randomUUID().toString();
-        entity.emailVerified = false;
+        user = userRepo.save(user);
 
-        entity = userRepo.save(entity);
+        // 记录审计日志
+        auditLogRepo.save(createAuditLog(
+            operatorId, "operator", AuditLogEntity.AuditAction.CREATE,
+            "user", user.id, user.username,
+            null, "User created", "SUCCESS", null
+        ));
 
-        logger.info("User created successfully: {} (ID: {})", entity.email, entity.id);
-        return new UserDTO(entity);
+        logger.info("User created successfully: {} (ID: {})", user.username, user.id);
+        return user;
     }
 
     /**
-     * 更新用户信息
+     * 更新用户
      */
-    public UserDTO updateUser(String userId, UserDTO dto) {
+    public UserEntity updateUser(String userId, UserEntity updates, String operatorId) {
         logger.info("Updating user: {}", userId);
 
-        UserEntity entity = userRepo.findById(userId)
-            .filter(user -> user.deletedAt == null)
+        UserEntity user = userRepo.findById(userId)
             .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
 
-        // 检查邮箱变更
-        if (dto.email != null && !dto.email.equals(entity.email)) {
-            if (userRepo.findByEmailAndDeletedAtIsNull(dto.email).isPresent()) {
-                throw new IllegalArgumentException("Email already exists: " + dto.email);
+        // 记录旧值
+        String oldValue = String.format("username=%s, email=%s, status=%s",
+            user.username, user.email, user.status);
+
+        // 更新字段
+        if (updates.displayName != null) {
+            user.displayName = updates.displayName;
+        }
+        if (updates.email != null) {
+            // 检查邮箱是否已被其他用户使用
+            if (!user.email.equals(updates.email) && userRepo.existsByEmail(updates.email)) {
+                throw new IllegalArgumentException("Email already exists: " + updates.email);
             }
-            entity.emailVerified = false;
-            entity.emailVerificationToken = UUID.randomUUID().toString();
+            user.email = updates.email;
+        }
+        if (updates.avatar != null) {
+            user.avatar = updates.avatar;
+        }
+        if (updates.timezone != null) {
+            user.timezone = updates.timezone;
+        }
+        if (updates.language != null) {
+            user.language = updates.language;
+        }
+        if (updates.status != null) {
+            user.status = updates.status;
+        }
+        if (updates.roles != null) {
+            user.roles = updates.roles;
         }
 
-        dto.updateEntity(entity);
-        entity = userRepo.save(entity);
+        user = userRepo.save(user);
+
+        // 记录审计日志
+        String newValue = String.format("username=%s, email=%s, status=%s",
+            user.username, user.email, user.status);
+        auditLogRepo.save(createAuditLog(
+            operatorId, "operator", AuditLogEntity.AuditAction.UPDATE,
+            "user", user.id, user.username,
+            oldValue, newValue, "SUCCESS", null
+        ));
 
         logger.info("User updated successfully: {}", userId);
-        return new UserDTO(entity);
+        return user;
     }
 
     /**
      * 删除用户（软删除）
      */
-    public void deleteUser(String userId) {
+    public void deleteUser(String userId, String operatorId) {
         logger.info("Deleting user: {}", userId);
 
-        UserEntity entity = userRepo.findById(userId)
-            .filter(user -> user.deletedAt == null)
+        UserEntity user = userRepo.findById(userId)
             .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
 
-        // 检查是否是超级管理员：禁止删除最后一位 SUPER_ADMIN
-        if (entity.globalRole == UserEntity.GlobalRole.SUPER_ADMIN) {
-            long cnt = userRepo.countByGlobalRoleAndDeletedAtIsNull(UserEntity.GlobalRole.SUPER_ADMIN);
-            if (cnt <= 1) {
-                throw new IllegalStateException("Cannot delete the last SUPER_ADMIN user");
-            }
-        }
+        user.deletedAt = LocalDateTime.now();
+        user.status = UserEntity.UserStatus.INACTIVE;
+        userRepo.save(user);
 
-        // 软删除用户
-        entity.deletedAt = LocalDateTime.now();
-        entity.status = UserEntity.UserStatus.DELETED;
-        userRepo.save(entity);
-
-        // 删除所有角色关联
-        userRoleRepo.deleteByUserId(userId);
+        // 记录审计日志
+        auditLogRepo.save(createAuditLog(
+            operatorId, "operator", AuditLogEntity.AuditAction.DELETE,
+            "user", user.id, user.username,
+            "User active", "User deleted", "SUCCESS", null
+        ));
 
         logger.info("User deleted successfully: {}", userId);
     }
 
     /**
-     * 根据ID获取用户
+     * 根据ID查找用户
      */
-    @Transactional(readOnly = true)
-    public Optional<UserDTO> getUser(String userId) {
+    public Optional<UserEntity> findById(String userId) {
         return userRepo.findById(userId)
-            .filter(user -> user.deletedAt == null)
-            .map(entity -> {
-                UserDTO dto = new UserDTO(entity);
-                enrichWithRoles(dto);
-                return dto;
-            });
+            .filter(user -> user.deletedAt == null);
     }
 
     /**
-     * 根据邮箱获取用户
+     * 根据用户名查找用户
      */
-    @Transactional(readOnly = true)
-    public Optional<UserDTO> getUserByEmail(String email) {
-        return userRepo.findByEmailAndDeletedAtIsNull(email)
-            .map(entity -> {
-                UserDTO dto = new UserDTO(entity);
-                enrichWithRoles(dto);
-                return dto;
-            });
+    public Optional<UserEntity> findByUsername(String username) {
+        return userRepo.findByUsername(username)
+            .filter(user -> user.deletedAt == null);
+    }
+
+    /**
+     * 根据邮箱查找用户
+     */
+    public Optional<UserEntity> findByEmail(String email) {
+        return userRepo.findByEmail(email)
+            .filter(user -> user.deletedAt == null);
+    }
+
+    /**
+     * 根据Keycloak ID查找用户
+     */
+    public Optional<UserEntity> findByKeycloakId(String keycloakId) {
+        return userRepo.findByKeycloakId(keycloakId)
+            .filter(user -> user.deletedAt == null);
+    }
+
+    /**
+     * 分页查询用户
+     */
+    public Page<UserEntity> listUsers(Pageable pageable) {
+        return userRepo.findByStatusAndDeletedAtIsNull(UserEntity.UserStatus.ACTIVE, pageable);
     }
 
     /**
      * 搜索用户
      */
-    @Transactional(readOnly = true)
-    public Page<UserDTO> searchUsers(String query, Pageable pageable) {
-        return userRepo.searchUsers(query, pageable)
-            .map(entity -> {
-                UserDTO dto = new UserDTO(entity);
-                enrichWithRoles(dto);
-                return dto;
-            });
+    public Page<UserEntity> searchUsers(String query, Pageable pageable) {
+        return userRepo.searchByName(query, pageable);
     }
 
     /**
-     * 验证用户邮箱
+     * 根据角色查找用户
      */
-    public boolean verifyEmail(String token) {
-        logger.info("Verifying email with token: {}", token);
-
-        Optional<UserEntity> userOpt = userRepo.findByEmailVerificationTokenAndDeletedAtIsNull(token);
-        if (userOpt.isEmpty()) {
-            return false;
-        }
-
-        UserEntity user = userOpt.get();
-        user.emailVerified = true;
-        user.emailVerificationToken = null;
-        userRepo.save(user);
-
-        logger.info("Email verified successfully for user: {}", user.email);
-        return true;
+    public List<UserEntity> findByRole(UserEntity.UserRole role) {
+        return userRepo.findByRole(role);
     }
 
     /**
-     * 重置密码请求
+     * 记录用户登录
      */
-    public boolean requestPasswordReset(String email) {
-        logger.info("Password reset requested for email: {}", email);
+    public void recordLogin(String userId, String ip) {
+        logger.info("Recording login for user: {} from IP: {}", userId, ip);
 
-        Optional<UserEntity> userOpt = userRepo.findByEmailAndDeletedAtIsNull(email);
-        if (userOpt.isEmpty()) {
-            // 为安全起见，不透露用户是否存在
-            return true;
-        }
-
-        UserEntity user = userOpt.get();
-        user.passwordResetToken = UUID.randomUUID().toString();
-        user.passwordResetExpires = LocalDateTime.now().plusHours(1); // 1小时过期
-        userRepo.save(user);
-
-        logger.info("Password reset token generated for user: {}", email);
-        return true;
-    }
-
-    /**
-     * 重置密码
-     */
-    public boolean resetPassword(String token, String newPassword) {
-        logger.info("Resetting password with token: {}", token);
-
-        Optional<UserEntity> userOpt = userRepo.findByPasswordResetTokenAndDeletedAtIsNull(token);
-        if (userOpt.isEmpty()) {
-            return false;
-        }
-
-        UserEntity user = userOpt.get();
-        if (user.passwordResetExpires == null || user.passwordResetExpires.isBefore(LocalDateTime.now())) {
-            return false;
-        }
-
-        user.passwordHash = passwordEncoder.encode(newPassword);
-        user.passwordResetToken = null;
-        user.passwordResetExpires = null;
-        user.resetLoginAttempts(); // 重置登录尝试次数
-        userRepo.save(user);
-
-        logger.info("Password reset successfully for user: {}", user.email);
-        return true;
-    }
-
-    /**
-     * 验证用户密码
-     */
-    @Transactional(readOnly = true)
-    public boolean validatePassword(String email, String password) {
-        Optional<UserEntity> userOpt = userRepo.findByEmailAndDeletedAtIsNull(email);
-        if (userOpt.isEmpty()) {
-            return false;
-        }
-
-        UserEntity user = userOpt.get();
-        if (user.passwordHash == null) {
-            return false;
-        }
-
-        return passwordEncoder.matches(password, user.passwordHash);
-    }
-
-    /**
-     * 记录登录成功
-     */
-    public void recordSuccessfulLogin(String userId, String ipAddress) {
-        userRepo.findById(userId).ifPresent(user -> {
-            user.lastLogin = LocalDateTime.now();
-            user.lastLoginIp = ipAddress;
-            user.resetLoginAttempts();
-            userRepo.save(user);
-        });
-    }
-
-    /**
-     * 记录登录失败
-     */
-    public void recordFailedLogin(String email, String ipAddress) {
-        userRepo.findByEmailAndDeletedAtIsNull(email).ifPresent(user -> {
-            user.incrementLoginAttempts();
-            userRepo.save(user);
-        });
-    }
-
-    /**
-     * 为用户分配角色
-     */
-    public void assignRole(String userId, UserRoleEntity.RoleType role,
-                          UserRoleEntity.PermissionScope scope,
-                          String gameId, String environmentId) {
-        logger.info("Assigning role {} to user {}", role, userId);
-
-        // 验证用户存在
         UserEntity user = userRepo.findById(userId)
-            .filter(u -> u.deletedAt == null)
             .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
 
-        // 验证权限范围的一致性
-        validateRoleScope(role, scope, gameId, environmentId);
+        user.recordLogin(ip);
+        userRepo.save(user);
 
-        // 检查是否已有相同角色
-        List<UserRoleEntity> existingRoles = gameId != null
-            ? userRoleRepo.findByUserIdAndGameId(userId, gameId)
-            : userRoleRepo.findByUserId(userId);
-        boolean hasRole = existingRoles.stream()
-            .anyMatch(r -> r.role == role && Objects.equals(r.gameId, gameId) && Objects.equals(r.environmentId, environmentId));
+        // 记录审计日志
+        auditLogRepo.save(createAuditLog(
+            userId, user.username, AuditLogEntity.AuditAction.LOGIN,
+            "user", user.id, user.username,
+            null, "Login from " + ip, "SUCCESS", ip
+        ));
+    }
 
-        if (hasRole) {
-            throw new IllegalStateException("User already has this role in the specified scope");
+    /**
+     * 记录用户登出
+     */
+    public void recordLogout(String userId, String ip) {
+        logger.info("Recording logout for user: {} from IP: {}", userId, ip);
+
+        UserEntity user = userRepo.findById(userId)
+            .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
+
+        // 记录审计日志
+        auditLogRepo.save(createAuditLog(
+            userId, user.username, AuditLogEntity.AuditAction.LOGOUT,
+            "user", user.id, user.username,
+            null, "Logout from " + ip, "SUCCESS", ip
+        ));
+    }
+
+    /**
+     * 更新用户角色
+     */
+    public UserEntity updateRoles(String userId, Set<UserEntity.UserRole> roles, String operatorId) {
+        logger.info("Updating roles for user: {}", userId);
+
+        UserEntity user = userRepo.findById(userId)
+            .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
+
+        Set<UserEntity.UserRole> oldRoles = new HashSet<>(user.roles);
+        user.roles = roles;
+        user = userRepo.save(user);
+
+        // 记录审计日志
+        auditLogRepo.save(createAuditLog(
+            operatorId, "operator", AuditLogEntity.AuditAction.GRANT_ROLE,
+            "user", user.id, user.username,
+            "Roles: " + oldRoles, "Roles: " + roles, "SUCCESS", null
+        ));
+
+        logger.info("Roles updated successfully for user: {}", userId);
+        return user;
+    }
+
+    /**
+     * 启用/禁用双因素认证
+     */
+    public UserEntity toggleTwoFactor(String userId, boolean enabled, String operatorId) {
+        logger.info("Toggling two-factor authentication for user: {} to {}", userId, enabled);
+
+        UserEntity user = userRepo.findById(userId)
+            .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
+
+        user.twoFactorEnabled = enabled;
+        if (!enabled) {
+            user.twoFactorSecret = null;
         }
+        user = userRepo.save(user);
 
-        // 创建新角色
-        UserRoleEntity roleEntity = new UserRoleEntity();
-        roleEntity.id = "role_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-        roleEntity.userId = userId;
-        roleEntity.gameId = gameId;
-        roleEntity.environmentId = environmentId;
-        roleEntity.role = role;
-        roleEntity.scope = scope;
-        roleEntity.invitationAccepted = true; // 直接分配，无需邀请
+        // 记录审计日志
+        auditLogRepo.save(createAuditLog(
+            operatorId, "operator",
+            enabled ? AuditLogEntity.AuditAction.ENABLE : AuditLogEntity.AuditAction.DISABLE,
+            "user", user.id, user.username,
+            "Two-factor: " + !enabled, "Two-factor: " + enabled, "SUCCESS", null
+        ));
 
-        userRoleRepo.save(roleEntity);
-
-        logger.info("Role assigned successfully: {} to user {}", role, userId);
+        logger.info("Two-factor authentication toggled successfully for user: {}", userId);
+        return user;
     }
 
     /**
-     * 移除用户角色
+     * 锁定用户
      */
-    public void removeRole(String userId, String roleId) {
-        logger.info("Removing role {} from user {}", roleId, userId);
+    public UserEntity lockUser(String userId, String operatorId) {
+        logger.info("Locking user: {}", userId);
 
-        UserRoleEntity role = userRoleRepo.findById(roleId)
-            .filter(r -> r.userId.equals(userId))
-            .orElseThrow(() -> new IllegalArgumentException("Role not found or not owned by user"));
+        UserEntity user = userRepo.findById(userId)
+            .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
 
-        userRoleRepo.delete(role);
+        user.status = UserEntity.UserStatus.LOCKED;
+        user = userRepo.save(user);
 
-        logger.info("Role removed successfully: {} from user {}", roleId, userId);
+        // 记录审计日志
+        auditLogRepo.save(createAuditLog(
+            operatorId, "operator", AuditLogEntity.AuditAction.UPDATE,
+            "user", user.id, user.username,
+            "Status: ACTIVE", "Status: LOCKED", "SUCCESS", null
+        ));
+
+        logger.info("User locked successfully: {}", userId);
+        return user;
     }
 
     /**
-     * 检查用户权限
+     * 解锁用户
      */
-    @Transactional(readOnly = true)
-    public boolean hasPermission(String userId, UserRoleEntity.RoleType role, String gameId, String environmentId) {
-        return userRoleRepo.hasRole(userId, role, gameId, environmentId, LocalDateTime.now());
+    public UserEntity unlockUser(String userId, String operatorId) {
+        logger.info("Unlocking user: {}", userId);
+
+        UserEntity user = userRepo.findById(userId)
+            .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
+
+        user.status = UserEntity.UserStatus.ACTIVE;
+        user = userRepo.save(user);
+
+        // 记录审计日志
+        auditLogRepo.save(createAuditLog(
+            operatorId, "operator", AuditLogEntity.AuditAction.UPDATE,
+            "user", user.id, user.username,
+            "Status: LOCKED", "Status: ACTIVE", "SUCCESS", null
+        ));
+
+        logger.info("User unlocked successfully: {}", userId);
+        return user;
     }
 
     /**
-     * 获取用户所有角色
+     * 获取用户统计信息
      */
-    @Transactional(readOnly = true)
-    public List<UserRoleEntity> getUserRoles(String userId) {
-        return userRoleRepo.findByUserId(userId);
-    }
-
-    // 私有辅助方法
-
-    /**
-     * 验证角色范围的一致性
-     */
-    private void validateRoleScope(UserRoleEntity.RoleType role, UserRoleEntity.PermissionScope scope,
-                                  String gameId, String environmentId) {
-        switch (scope) {
-            case GLOBAL:
-                if (gameId != null || environmentId != null) {
-                    throw new IllegalArgumentException("Global scope should not have game/environment ID");
-                }
-                break;
-            case GAME:
-                if (gameId == null || environmentId != null) {
-                    throw new IllegalArgumentException("Game scope requires game ID only");
-                }
-                break;
-            case ENVIRONMENT:
-                if (gameId == null || environmentId == null) {
-                    throw new IllegalArgumentException("Environment scope requires game ID and environment ID");
-                }
-                break;
+    public Map<String, Object> getUserStatistics() {
+        LocalDateTime since = LocalDateTime.now().minusDays(30);
+        List<Object> stats = userRepo.getUserStatistics(since);
+        if (stats.isEmpty()) {
+            return Map.of();
         }
-
-        if (gameId != null) {
-            GameEntity game = gameRepo.findById(gameId)
-                .filter(g -> g.deletedAt == null)
-                .orElseThrow(() -> new IllegalArgumentException("Game not found: " + gameId));
-
-            if (environmentId != null) {
-                GameEnvironmentEntity environment = gameEnvironmentRepo.findById(environmentId)
-                    .filter(env -> env.deletedAt == null)
-                    .orElseThrow(() -> new IllegalArgumentException("Environment not found: " + environmentId));
-
-                if (!Objects.equals(environment.gameId, game.id)) {
-                    throw new IllegalArgumentException("Environment does not belong to game: " + environmentId);
-                }
-            }
-        }
+        return (Map<String, Object>) stats.get(0);
     }
 
     /**
-     * 丰富用户信息的角色数据
+     * 获取最近登录的用户
      */
-    private void enrichWithRoles(UserDTO dto) {
-        List<UserRoleEntity> roles = userRoleRepo.findByUserId(dto.id);
-        dto.roles = roles.stream()
-            .map(role -> Map.of(
-                "id", role.id,
-                "role", role.role.toString(),
-                "scope", role.scope.toString(),
-                "gameId", role.gameId != null ? role.gameId : "",
-                "environmentId", role.environmentId != null ? role.environmentId : ""
-            ))
-            .collect(Collectors.toList());
+    public List<UserEntity> getRecentlyLoggedInUsers(int limit) {
+        return userRepo.findRecentlyLoggedIn(
+            org.springframework.data.domain.PageRequest.of(0, limit));
+    }
+
+    /**
+     * 创建审计日志
+     */
+    private AuditLogEntity createAuditLog(
+            String userId, String username, AuditLogEntity.AuditAction action,
+            String resourceType, String resourceId, String resourceName,
+            String oldValue, String newValue, String status, String ip) {
+        
+        AuditLogEntity log = new AuditLogEntity();
+        log.userId = userId;
+        log.username = username;
+        log.action = action;
+        log.resourceType = resourceType;
+        log.resourceId = resourceId;
+        log.resourceName = resourceName;
+        log.oldValue = oldValue;
+        log.newValue = newValue;
+        log.status = AuditLogEntity.AuditStatus.valueOf(status);
+        log.ipAddress = ip;
+        log.createdAt = LocalDateTime.now();
+        return log;
     }
 }
