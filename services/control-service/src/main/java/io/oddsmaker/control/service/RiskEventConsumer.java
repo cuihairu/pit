@@ -4,9 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.oddsmaker.control.dto.RiskEventDto;
 import io.oddsmaker.control.jpa.AuditLogEntity;
 import io.oddsmaker.control.jpa.BlockListEntity;
+import io.oddsmaker.control.jpa.IdentityLinkEntity;
+import io.oddsmaker.control.jpa.IdentityLinkRepo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
@@ -34,6 +37,13 @@ public class RiskEventConsumer {
 
     @Autowired
     private AuditLogService auditLogService;
+
+    @Autowired
+    private IdentityLinkRepo identityLinkRepo;
+
+    /** 身份关联扩散封禁开关（默认关：共享设备可能关联大量玩家，灰度后再开）。 */
+    @Value("${oddsmaker.risk.identity-extend:false}")
+    private boolean identityExtend;
 
     @KafkaListener(topics = "oddsmaker.risk_events")
     public void onRiskEvent(String message) {
@@ -126,6 +136,40 @@ public class RiskEventConsumer {
 
         logger.info("BLOCK applied: {}={} in game={}, permanent={}, duration={}min",
             targetType, event.subjectId, event.gameId, isPermanent, durationMinutes);
+
+        // 身份关联扩散封禁（默认关，限深度1/上限10/失败不阻断）
+        extendBlockByIdentity(event, targetType, event.subjectId, isPermanent, durationMinutes);
+    }
+
+    /**
+     * 身份关联扩散：当主 subject 是 DEVICE 且开关开启时，经 identity_links 把同身份的
+     * player_id/user_id 一并封禁（共享设备 → 关联账号）。默认关闭，灰度后再开。
+     */
+    private void extendBlockByIdentity(RiskEventDto event, String mainTargetType, String mainSubjectId,
+                                       boolean isPermanent, Integer durationMinutes) {
+        if (!identityExtend || !"device_id".equals(mainTargetType) || mainSubjectId == null) return;
+        try {
+            int extended = 0;
+            for (IdentityLinkEntity link : identityLinkRepo.findByTypeAndId("device_id", mainSubjectId)) {
+                if (extended >= 10) break;  // 单次扩散上限，防爆炸
+                for (IdentityLinkEntity il : identityLinkRepo.findByIdentityId(link.identityId)) {
+                    if (extended >= 10) break;
+                    if ("player_id".equals(il.linkedIdentityType) || "user_id".equals(il.linkedIdentityType)) {
+                        blockListService.addBlock(
+                            event.gameId, event.environment, il.linkedIdentityType, il.linkedId,
+                            "identity-linked from " + mainTargetType + "=" + mainSubjectId,
+                            "fraud", BlockListEntity.BlockType.HARD,
+                            isPermanent, durationMinutes, "risk-automation", null, event.reason);
+                        extended++;
+                    }
+                }
+            }
+            if (extended > 0) {
+                logger.info("Identity-extended BLOCK: {} linked targets from {}={}", extended, mainTargetType, mainSubjectId);
+            }
+        } catch (Exception e) {
+            logger.warn("Identity extend block failed (non-fatal): {}", e.getMessage());
+        }
     }
 
     private void handleWebhook(RiskEventDto event) {

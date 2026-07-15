@@ -25,6 +25,12 @@ public interface IdentityLinkRepo extends JpaRepository<IdentityLinkEntity, Stri
     List<IdentityLinkEntity> findByTypeAndId(@Param("type") String type, @Param("id") String id);
 
     /**
+     * 按唯一三元组查活跃 link（供 IdentityConsumer 幂等 upsert：命中则更新，未命中则插入）
+     */
+    @Query("SELECT il FROM IdentityLinkEntity il WHERE il.identityId = :identityId AND il.linkedIdentityType = :type AND il.linkedId = :linkedId AND il.status = 'ACTIVE' AND il.deletedAt IS NULL")
+    Optional<IdentityLinkEntity> findActiveByIdentityIdAndTypeAndLinkedId(@Param("identityId") String identityId, @Param("type") String type, @Param("linkedId") String linkedId);
+
+    /**
      * 查找已确认的关联
      */
     @Query("SELECT il FROM IdentityLinkEntity il WHERE il.identityId = :identityId AND il.verificationStatus = 'CONFIRMED' AND il.status = 'ACTIVE' AND il.deletedAt IS NULL")

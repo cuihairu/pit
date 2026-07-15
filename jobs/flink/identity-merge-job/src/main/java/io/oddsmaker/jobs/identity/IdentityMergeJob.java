@@ -11,6 +11,8 @@ import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.connector.jdbc.JdbcConnectionOptions;
 import org.apache.flink.connector.jdbc.JdbcExecutionOptions;
 import org.apache.flink.connector.jdbc.JdbcSink;
+import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
+import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -31,6 +33,7 @@ public class IdentityMergeJob {
         String bootstrap = System.getProperty("kafka.bootstrap", "localhost:9092");
         String registry = System.getProperty("registry.url", "http://localhost:8081/apis/registry/v2");
         String topic = System.getProperty("kafka.topic", "oddsmaker.events_raw");
+        String identityTopic = System.getProperty("identity.topic", "oddsmaker.identity_events");
         String chUrl = System.getProperty("clickhouse.url", "jdbc:clickhouse://localhost:8123/default");
         String chUser = System.getProperty("clickhouse.user", "default");
         String chPass = System.getProperty("clickhouse.pass", "");
@@ -93,6 +96,16 @@ public class IdentityMergeJob {
 
         identities.addSink(sink).name("clickhouse-identities");
 
+        // Kafka 双写：与 ClickHouse jdbcSink 并联，供 control-service IdentityConsumer 消费落 PG
+        KafkaSink<String> kafkaSink = KafkaSink.<String>builder()
+                .setBootstrapServers(bootstrap)
+                .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                        .setTopic(identityTopic)
+                        .setValueSerializationSchema(new org.apache.flink.api.common.serialization.SimpleStringSchema())
+                        .build())
+                .build();
+        identities.map(IdentityMergeJob::toJson).returns(Types.STRING).sinkTo(kafkaSink).name("kafka-identity-events");
+
         env.execute("oddsmaker-identity-merge");
     }
 
@@ -116,6 +129,7 @@ public class IdentityMergeJob {
         public String identityId;
         public String userId;
         public String playerId;
+        public Set<String> playerIds = new LinkedHashSet<>();
         public Set<String> characterIds = new LinkedHashSet<>();
         public Set<String> deviceIds = new LinkedHashSet<>();
         public Timestamp firstSeen;
@@ -145,19 +159,22 @@ public class IdentityMergeJob {
             if (gameId == null || environment == null || userId.isEmpty() || deviceId == null) return;
 
             String playerId = extractPlayerId(record);
+            String characterId = str(record.get("character_id"));  // Avro 顶层可空字段，修复 character_ids 恒空 bug
             Timestamp ts = extractTs(record);
 
             IdentityState s = state.value();
             if (s == null) {
                 s = new IdentityState();
-                s.identityId = "idt_" + UUID.randomUUID().toString().replace("-", "");
+                s.identityId = "idt_" + UUID.randomUUID().toString().replace("-", "").substring(0, 28);  // 4+28=32 字符，对齐 PG VARCHAR(32)
                 s.firstSeen = ts;
                 s.lastSeen = ts;
                 s.deviceIds.add(deviceId);
                 if (playerId != null && !playerId.isEmpty()) s.playerIds.add(playerId);
+                if (characterId != null && !characterId.isEmpty()) s.characterIds.add(characterId);
             } else {
                 s.deviceIds.add(deviceId);
                 if (playerId != null && !playerId.isEmpty()) s.playerIds.add(playerId);
+                if (characterId != null && !characterId.isEmpty()) s.characterIds.add(characterId);
                 if (ts != null) {
                     s.lastSeen = ts;
                     if (s.firstSeen == null || ts.before(s.firstSeen)) s.firstSeen = ts;
@@ -172,12 +189,45 @@ public class IdentityMergeJob {
             r.identityId = s.identityId;
             r.userId = userId;
             r.playerId = s.playerIds.isEmpty() ? "" : s.playerIds.iterator().next();
+            r.playerIds = new LinkedHashSet<>(s.playerIds);
             r.characterIds = new LinkedHashSet<>(s.characterIds);
             r.deviceIds = new LinkedHashSet<>(s.deviceIds);
             r.firstSeen = s.firstSeen;
             r.lastSeen = s.lastSeen;
             out.collect(r);
         }
+    }
+
+    static String toJson(IdentityRecord r) {
+        StringBuilder sb = new StringBuilder("{");
+        sb.append("\"game_id\":\"").append(esc(r.gameId)).append("\"");
+        sb.append(",\"environment\":\"").append(esc(r.environment)).append("\"");
+        sb.append(",\"identity_id\":\"").append(esc(r.identityId)).append("\"");
+        sb.append(",\"user_id\":\"").append(esc(r.userId)).append("\"");
+        sb.append(",\"player_id\":\"").append(esc(r.playerId)).append("\"");
+        sb.append(",\"device_ids\":").append(jsonArray(r.deviceIds));
+        sb.append(",\"player_ids\":").append(jsonArray(r.playerIds));
+        sb.append(",\"character_ids\":").append(jsonArray(r.characterIds));
+        sb.append(",\"first_seen\":").append(r.firstSeen.getTime());
+        sb.append(",\"last_seen\":").append(r.lastSeen.getTime());
+        sb.append("}");
+        return sb.toString();
+    }
+
+    static String jsonArray(Set<String> s) {
+        if (s == null || s.isEmpty()) return "[]";
+        StringBuilder sb = new StringBuilder("[");
+        boolean first = true;
+        for (String v : s) {
+            if (!first) sb.append(",");
+            sb.append("\"").append(esc(v)).append("\"");
+            first = false;
+        }
+        return sb.append("]").toString();
+    }
+
+    static String esc(String s) {
+        return s == null ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private static String str(Object v) { return v == null ? null : v.toString(); }

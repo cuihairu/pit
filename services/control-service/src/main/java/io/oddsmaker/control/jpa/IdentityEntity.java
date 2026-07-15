@@ -1,5 +1,6 @@
 package io.oddsmaker.control.jpa;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
@@ -96,10 +97,12 @@ public class IdentityEntity {
     public LocalDateTime deletedAt;
 
     // 关联关系
+    @JsonIgnore
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "game_id", insertable = false, updatable = false)
     public GameEntity game;
 
+    @JsonIgnore
     @OneToMany(mappedBy = "identity", fetch = FetchType.LAZY)
     public List<IdentityLinkEntity> links;
 
