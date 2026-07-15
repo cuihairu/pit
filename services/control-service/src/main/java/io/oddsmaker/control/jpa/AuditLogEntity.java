@@ -167,11 +167,29 @@ public class AuditLogEntity {
         REVOKE_ROLE,
         GRANT_PERMISSION,
         REVOKE_PERMISSION,
-        
+
+        // 安全操作
+        ACTIVATE,
+        DEACTIVATE,
+        BLOCK,
+        UNBLOCK,
+        SECURITY_ALERT,
+        GRANT,
+
         // 系统操作
         SYSTEM_BACKUP,
         SYSTEM_RESTORE,
         SYSTEM_MAINTENANCE
+    }
+
+    /**
+     * 审计结果枚举
+     */
+    public enum AuditResult {
+        SUCCESS,
+        FAILURE,
+        PARTIAL,
+        SKIPPED
     }
 
     /**
@@ -231,6 +249,12 @@ public class AuditLogEntity {
             case REVOKE_ROLE: return "撤销角色";
             case GRANT_PERMISSION: return "授予权限";
             case REVOKE_PERMISSION: return "撤销权限";
+            case ACTIVATE: return "激活";
+            case DEACTIVATE: return "停用";
+            case BLOCK: return "封禁";
+            case UNBLOCK: return "解封";
+            case SECURITY_ALERT: return "安全告警";
+            case GRANT: return "授权";
             case SYSTEM_BACKUP: return "系统备份";
             case SYSTEM_RESTORE: return "系统恢复";
             case SYSTEM_MAINTENANCE: return "系统维护";

@@ -31,10 +31,47 @@ public class AuditLogService {
      * 记录审计日志
      */
     public AuditLogEntity log(AuditLogEntity auditLog) {
-        logger.debug("Recording audit log: {} - {} - {}", 
+        logger.debug("Recording audit log: {} - {} - {}",
             auditLog.action, auditLog.resourceType, auditLog.resourceId);
-        
+
         return auditLogRepo.save(auditLog);
+    }
+
+    /**
+     * 通用审计日志重载（供风控/封禁/审核队列等安全操作使用）
+     * 参数顺序对齐 BlockListService/ReviewQueueService/FlinkJobService/ReportService 的调用。
+     */
+    public AuditLogEntity log(AuditLogEntity.AuditAction action,
+            String resourceType, String resourceId, String resourceName,
+            String details, AuditLogEntity.AuditResult result,
+            String actorUserId, String oldValue, String newValue,
+            String ip, String userAgent, Map<String, ?> metadata) {
+
+        AuditLogEntity auditLog = new AuditLogEntity();
+        auditLog.userId = actorUserId;
+        auditLog.username = actorUserId;
+        auditLog.action = action;
+        auditLog.resourceType = resourceType;
+        auditLog.resourceId = resourceId;
+        auditLog.resourceName = resourceName;
+        auditLog.details = details;
+        auditLog.oldValue = oldValue;
+        auditLog.newValue = newValue;
+        auditLog.ipAddress = ip;
+        auditLog.userAgent = userAgent;
+        if (metadata != null) {
+            Object gameId = metadata.get("gameId");
+            if (gameId != null) auditLog.gameId = gameId.toString();
+            Object env = metadata.get("environment");
+            if (env != null) auditLog.environment = env.toString();
+        }
+        auditLog.status = result == AuditLogEntity.AuditResult.SUCCESS
+            ? AuditLogEntity.AuditStatus.SUCCESS
+            : (result == AuditLogEntity.AuditResult.FAILURE
+                ? AuditLogEntity.AuditStatus.FAILURE
+                : AuditLogEntity.AuditStatus.PARTIAL);
+
+        return log(auditLog);
     }
 
     /**
@@ -176,9 +213,9 @@ public class AuditLogService {
     /**
      * 记录权限变更
      */
-    public AuditLogEntity logPermissionChange(String userId, String username, String targetUserId, 
+    public AuditLogEntity logPermissionChange(String userId, String username, String targetUserId,
             String targetUsername, String action, String oldValue, String newValue, String ip) {
-        
+
         AuditLogEntity auditLog = new AuditLogEntity();
         auditLog.userId = userId;
         auditLog.username = username;
@@ -190,7 +227,149 @@ public class AuditLogService {
         auditLog.newValue = newValue;
         auditLog.ipAddress = ip;
         auditLog.status = AuditLogEntity.AuditStatus.SUCCESS;
-        
+
+        return log(auditLog);
+    }
+
+    // ========== 便捷重载：resourceType-first 模式（供其他服务统一调用） ==========
+
+    /**
+     * 创建审计日志（resourceType-first 参数顺序，带 metadata）
+     */
+    public AuditLogEntity logCreate(String resourceType, String resourceId, String resourceName,
+            String userId, String username, String ip, Map<String, ?> metadata) {
+        AuditLogEntity auditLog = new AuditLogEntity();
+        auditLog.userId = userId;
+        auditLog.username = username != null ? username : userId;
+        auditLog.action = AuditLogEntity.AuditAction.CREATE;
+        auditLog.resourceType = resourceType;
+        auditLog.resourceId = resourceId;
+        auditLog.resourceName = resourceName;
+        auditLog.ipAddress = ip;
+        if (metadata != null) {
+            Object gameId = metadata.get("gameId");
+            if (gameId != null) auditLog.gameId = gameId.toString();
+        }
+        auditLog.status = AuditLogEntity.AuditStatus.SUCCESS;
+        return log(auditLog);
+    }
+
+    /**
+     * 更新审计日志（resourceType-first 参数顺序，带 metadata）
+     */
+    public AuditLogEntity logUpdate(String resourceType, String resourceId, String resourceName,
+            String userId, String username, String ip, Map<String, ?> metadata) {
+        AuditLogEntity auditLog = new AuditLogEntity();
+        auditLog.userId = userId;
+        auditLog.username = username != null ? username : userId;
+        auditLog.action = AuditLogEntity.AuditAction.UPDATE;
+        auditLog.resourceType = resourceType;
+        auditLog.resourceId = resourceId;
+        auditLog.resourceName = resourceName;
+        auditLog.ipAddress = ip;
+        if (metadata != null) {
+            Object gameId = metadata.get("gameId");
+            if (gameId != null) auditLog.gameId = gameId.toString();
+        }
+        auditLog.status = AuditLogEntity.AuditStatus.SUCCESS;
+        return log(auditLog);
+    }
+
+    /**
+     * 删除审计日志（resourceType-first 参数顺序）
+     */
+    public AuditLogEntity logDelete(String resourceType, String resourceId, String resourceName,
+            String userId, String username, String ip) {
+        AuditLogEntity auditLog = new AuditLogEntity();
+        auditLog.userId = userId;
+        auditLog.username = username != null ? username : userId;
+        auditLog.action = AuditLogEntity.AuditAction.DELETE;
+        auditLog.resourceType = resourceType;
+        auditLog.resourceId = resourceId;
+        auditLog.resourceName = resourceName;
+        auditLog.ipAddress = ip;
+        auditLog.status = AuditLogEntity.AuditStatus.SUCCESS;
+        return log(auditLog);
+    }
+
+    // ========== 导出/集成日志 ==========
+
+    /**
+     * 记录数据导出操作
+     */
+    public AuditLogEntity logDataExport(String exportType, String jobId, String fileName,
+            String userId, String username, String ip) {
+        AuditLogEntity auditLog = new AuditLogEntity();
+        auditLog.userId = userId;
+        auditLog.username = username != null ? username : userId;
+        auditLog.action = AuditLogEntity.AuditAction.EXPORT;
+        auditLog.resourceType = exportType;
+        auditLog.resourceId = jobId;
+        auditLog.resourceName = fileName;
+        auditLog.ipAddress = ip;
+        auditLog.status = AuditLogEntity.AuditStatus.SUCCESS;
+        return log(auditLog);
+    }
+
+    /**
+     * 记录集成创建
+     */
+    public AuditLogEntity logIntegrationCreate(String integrationId, String name, String type,
+            String createdBy, String gameId) {
+        AuditLogEntity auditLog = new AuditLogEntity();
+        auditLog.userId = createdBy;
+        auditLog.username = createdBy;
+        auditLog.action = AuditLogEntity.AuditAction.CREATE;
+        auditLog.resourceType = type;
+        auditLog.resourceId = integrationId;
+        auditLog.resourceName = name;
+        auditLog.gameId = gameId;
+        auditLog.status = AuditLogEntity.AuditStatus.SUCCESS;
+        return log(auditLog);
+    }
+
+    /**
+     * 记录集成调用
+     */
+    public AuditLogEntity logIntegrationCall(String integrationId, String eventType,
+            String result, String gameId) {
+        AuditLogEntity auditLog = new AuditLogEntity();
+        auditLog.action = AuditLogEntity.AuditAction.READ;
+        auditLog.resourceType = "integration_call";
+        auditLog.resourceId = integrationId;
+        auditLog.details = eventType;
+        auditLog.gameId = gameId;
+        auditLog.status = "SUCCESS".equals(result)
+            ? AuditLogEntity.AuditStatus.SUCCESS
+            : AuditLogEntity.AuditStatus.FAILURE;
+        return log(auditLog);
+    }
+
+    /**
+     * 记录集成禁用
+     */
+    public AuditLogEntity logIntegrationDisable(String integrationId, String name, String gameId) {
+        AuditLogEntity auditLog = new AuditLogEntity();
+        auditLog.action = AuditLogEntity.AuditAction.DISABLE;
+        auditLog.resourceType = "integration";
+        auditLog.resourceId = integrationId;
+        auditLog.resourceName = name;
+        auditLog.gameId = gameId;
+        auditLog.status = AuditLogEntity.AuditStatus.SUCCESS;
+        return log(auditLog);
+    }
+
+    /**
+     * 记录集成删除
+     */
+    public AuditLogEntity logIntegrationDelete(String integrationId, String name, String gameId) {
+        AuditLogEntity auditLog = new AuditLogEntity();
+        auditLog.action = AuditLogEntity.AuditAction.DELETE;
+        auditLog.resourceType = "integration";
+        auditLog.resourceId = integrationId;
+        auditLog.resourceName = name;
+        auditLog.gameId = gameId;
+        auditLog.status = AuditLogEntity.AuditStatus.SUCCESS;
         return log(auditLog);
     }
 

@@ -35,6 +35,11 @@ oddsmaker:
     ip-rpm: 300        # per client IP per minute
   control:
     url: http://localhost:8085
+  blocklist:
+    enabled: true
+    admin-token: ${ODDSMAKER_ADMIN_TOKEN:admin}
+    timeout-ms: 200
+    cache-ttl-seconds: 15
   props:
     allowlist: []   # 示例: [level,stars,amount,currency,exp,variant]
   event:

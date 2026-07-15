@@ -549,9 +549,12 @@ public class PermissionService {
         if (analyst.permissions == null) {
             analyst.permissions = new HashSet<>();
         }
-        analyst.permissions.addAll(permissionRepo.findByResourceTypeAndAction("game", PermissionEntity.PermissionAction.READ));
-        analyst.permissions.addAll(permissionRepo.findByResourceTypeAndAction("environment", PermissionEntity.PermissionAction.READ));
-        analyst.permissions.addAll(permissionRepo.findByResourceTypeAndAction("experiment", PermissionEntity.PermissionAction.READ));
+        analyst.permissions.addAll(permissionRepo.findByResourceTypeAndAction("game", PermissionEntity.PermissionAction.READ)
+            .map(List::of).orElseGet(List::of));
+        analyst.permissions.addAll(permissionRepo.findByResourceTypeAndAction("environment", PermissionEntity.PermissionAction.READ)
+            .map(List::of).orElseGet(List::of));
+        analyst.permissions.addAll(permissionRepo.findByResourceTypeAndAction("experiment", PermissionEntity.PermissionAction.READ)
+            .map(List::of).orElseGet(List::of));
         roleRepo.save(analyst);
 
         // 开发者角色

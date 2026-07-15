@@ -103,6 +103,62 @@ public class UserEntity {
     @Column(name = "two_factor_secret", length = 100)
     public String twoFactorSecret;
 
+    // UserDTO 映射字段
+    @Column(length = 200)
+    public String name;
+
+    @Column(length = 200)
+    public String company;
+
+    @Column(length = 100)
+    public String title;
+
+    @Column(length = 50)
+    public String phone;
+
+    @Column(length = 50)
+    public String timeZone;
+
+    @Column(length = 10)
+    public String locale;
+
+    @Column(name = "avatar_url", length = 500)
+    public String avatarUrl;
+
+    /**
+     * 全局角色
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "global_role")
+    public GlobalRole globalRole;
+
+    @Column(name = "notification_email")
+    public Boolean notificationEmail;
+
+    @Column(name = "notification_sms")
+    public Boolean notificationSms;
+
+    @Column(name = "dashboard_theme", length = 20)
+    public String dashboardTheme;
+
+    @Column(name = "email_verified")
+    public Boolean emailVerified;
+
+    @Column(name = "login_attempts")
+    public Integer loginAttempts;
+
+    @Column(name = "last_login")
+    public LocalDateTime lastLogin;
+
+    /**
+     * 全局角色枚举
+     */
+    public enum GlobalRole {
+        USER,
+        OPERATOR,
+        SUPER_ADMIN
+    }
+
     // 时间戳
     @CreationTimestamp
     @Column(name = "created_at", nullable = false)

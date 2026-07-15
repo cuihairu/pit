@@ -95,7 +95,7 @@ public class SecurityService {
             config = mfaConfigRepo.save(config);
 
             // 记录审计日志
-            auditLogService.logCreate("mfa_config", config.id, config.mfaMethod.name(), config.userId, null, null, null);
+            auditLogService.logCreate("mfa_config", config.id, config.mfaMethod.name(), config.userId, null, null, (String) null);
 
             logger.info("MFA enabled for user: {} with method: {}", config.userId, config.mfaMethod);
         } else {

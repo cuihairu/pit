@@ -16,12 +16,12 @@ public interface FunnelStepRepo extends JpaRepository<FunnelStepEntity, Long> {
     /**
      * 根据漏斗ID查找步骤
      */
-    List<FunnelStepEntity> findByFunnelIdOrderByStepOrderAsc(Long funnelId);
+    List<FunnelStepEntity> findByFunnelIdOrderByStepOrderAsc(String funnelId);
 
     /**
      * 根据漏斗ID和步骤顺序查找步骤
      */
-    FunnelStepEntity findByFunnelIdAndStepOrder(Long funnelId, Integer stepOrder);
+    FunnelStepEntity findByFunnelIdAndStepOrder(String funnelId, Integer stepOrder);
 
     /**
      * 根据事件名称查找步骤
@@ -31,23 +31,23 @@ public interface FunnelStepRepo extends JpaRepository<FunnelStepEntity, Long> {
     /**
      * 根据漏斗ID删除所有步骤
      */
-    void deleteByFunnelId(Long funnelId);
+    void deleteByFunnelId(String funnelId);
 
     /**
      * 统计漏斗的步骤数量
      */
     @Query("SELECT COUNT(s) FROM FunnelStepEntity s WHERE s.funnel.id = :funnelId")
-    long countByFunnelId(@Param("funnelId") Long funnelId);
+    long countByFunnelId(@Param("funnelId") String funnelId);
 
     /**
      * 查找漏斗的第一个步骤
      */
     @Query("SELECT s FROM FunnelStepEntity s WHERE s.funnel.id = :funnelId ORDER BY s.stepOrder ASC LIMIT 1")
-    FunnelStepEntity findFirstStep(@Param("funnelId") Long funnelId);
+    FunnelStepEntity findFirstStep(@Param("funnelId") String funnelId);
 
     /**
      * 查找漏斗的最后一个步骤
      */
     @Query("SELECT s FROM FunnelStepEntity s WHERE s.funnel.id = :funnelId ORDER BY s.stepOrder DESC LIMIT 1")
-    FunnelStepEntity findLastStep(@Param("funnelId") Long funnelId);
+    FunnelStepEntity findLastStep(@Param("funnelId") String funnelId);
 }

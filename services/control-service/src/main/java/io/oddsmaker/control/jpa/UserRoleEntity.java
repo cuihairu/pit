@@ -90,4 +90,24 @@ public class UserRoleEntity {
     public boolean isEnvironmentScoped() {
         return gameId != null && environment != null;
     }
+
+    /**
+     * 角色类型枚举
+     */
+    public enum RoleType {
+        PLAYER,
+        ADMIN,
+        ANALYST,
+        DEVELOPER,
+        VIEWER
+    }
+
+    /**
+     * 权限范围枚举
+     */
+    public enum PermissionScope {
+        GLOBAL,
+        GAME,
+        ENVIRONMENT
+    }
 }

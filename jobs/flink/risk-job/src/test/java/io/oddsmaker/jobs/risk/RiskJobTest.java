@@ -83,16 +83,16 @@ class RiskJobTest {
         RiskJob.RiskHit hit = new RiskJob.RiskHit();
         hit.gameId = "game_demo";
         hit.environment = "prod";
-        hit.userId = "user_456";
+        hit.subjectId = "user_456";
         hit.riskType = "amount_threshold";
-        hit.score = 0.95;
-        hit.details = "Amount exceeds threshold";
+        hit.score = 0.95f;
+        hit.reason = "Amount exceeds threshold";
         
         assertEquals("game_demo", hit.gameId);
         assertEquals("prod", hit.environment);
-        assertEquals("user_456", hit.userId);
+        assertEquals("user_456", hit.subjectId);
         assertEquals("amount_threshold", hit.riskType);
-        assertEquals(0.95, hit.score);
-        assertEquals("Amount exceeds threshold", hit.details);
+        assertEquals(0.95f, hit.score, 0.0f);
+        assertEquals("Amount exceeds threshold", hit.reason);
     }
 }

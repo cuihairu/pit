@@ -71,7 +71,7 @@ class MLModelServiceTest {
         // Given
         when(mlModelRepo.existsByModelNameAndGameIdAndDeletedAtIsNull("Test Model", "game_test123")).thenReturn(false);
         when(mlModelRepo.save(any(MLModelEntity.class))).thenReturn(testModel);
-        doNothing().when(auditLogService).logCreate(anyString(), anyString(), anyString(), anyString(), anyString(), any(), any());
+
 
         // When
         MLModelEntity result = mlModelService.createModel(
@@ -179,7 +179,7 @@ class MLModelServiceTest {
 
         when(mlModelRepo.findById("ml_test123")).thenReturn(Optional.of(testModel));
         when(mlModelRepo.save(any(MLModelEntity.class))).thenReturn(testModel);
-        doNothing().when(auditLogService).logUpdate(anyString(), anyString(), anyString(), anyString(), anyString(), any(), any());
+        lenient().when(auditLogService.logUpdate(nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), anyMap())).thenReturn(null);
 
         // When
         MLModelEntity result = mlModelService.updateModel("ml_test123", updates, "test_user");
@@ -196,7 +196,7 @@ class MLModelServiceTest {
         testModel.modelStatus = MLModelEntity.ModelStatus.DRAFT;
         when(mlModelRepo.findById("ml_test123")).thenReturn(Optional.of(testModel));
         when(mlModelRepo.save(any(MLModelEntity.class))).thenReturn(testModel);
-        doNothing().when(auditLogService).logUpdate(anyString(), anyString(), anyString(), anyString(), anyString(), any(), any());
+        lenient().when(auditLogService.logUpdate(nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), anyMap())).thenReturn(null);
 
         // When
         MLModelEntity result = mlModelService.archiveModel("ml_test123", "test_user");
@@ -227,7 +227,7 @@ class MLModelServiceTest {
         testModel.modelStatus = MLModelEntity.ModelStatus.DRAFT;
         when(mlModelRepo.findById("ml_test123")).thenReturn(Optional.of(testModel));
         when(mlModelRepo.save(any(MLModelEntity.class))).thenReturn(testModel);
-        doNothing().when(auditLogService).logDelete(anyString(), anyString(), anyString(), anyString(), anyString(), any());
+        lenient().when(auditLogService.logDelete(nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class))).thenReturn(null);
 
         // When
         mlModelService.deleteModel("ml_test123", "test_user");
@@ -258,7 +258,7 @@ class MLModelServiceTest {
         when(mlModelRepo.findById("ml_test123")).thenReturn(Optional.of(testModel));
         when(modelTrainingRepo.save(any(ModelTrainingEntity.class))).thenReturn(testTraining);
         when(mlModelRepo.save(any(MLModelEntity.class))).thenReturn(testModel);
-        doNothing().when(auditLogService).logCreate(anyString(), anyString(), anyString(), anyString(), anyString(), any(), any());
+
 
         Map<String, Object> trainingConfig = new HashMap<>();
         trainingConfig.put("epochs", 100);
@@ -374,7 +374,7 @@ class MLModelServiceTest {
         when(modelTrainingRepo.findById("train_test123")).thenReturn(Optional.of(testTraining));
         when(modelTrainingRepo.save(any(ModelTrainingEntity.class))).thenReturn(testTraining);
         when(mlModelRepo.findById("ml_test123")).thenReturn(Optional.of(testModel));
-        doNothing().when(auditLogService).logUpdate(anyString(), anyString(), anyString(), anyString(), anyString(), any(), any());
+        lenient().when(auditLogService.logUpdate(nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), anyMap())).thenReturn(null);
 
         // When
         ModelTrainingEntity result = mlModelService.cancelTraining("train_test123", "test_user");
@@ -393,7 +393,7 @@ class MLModelServiceTest {
         testModel.modelArtifactPath = "/models/test.model";
         when(mlModelRepo.findById("ml_test123")).thenReturn(Optional.of(testModel));
         when(mlModelRepo.save(any(MLModelEntity.class))).thenReturn(testModel);
-        doNothing().when(auditLogService).logUpdate(anyString(), anyString(), anyString(), anyString(), anyString(), any(), any());
+        lenient().when(auditLogService.logUpdate(nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), anyMap())).thenReturn(null);
 
         Map<String, Object> deploymentConfig = new HashMap<>();
         deploymentConfig.put("servingEndpoint", "http://localhost:8080/predict");
@@ -430,7 +430,7 @@ class MLModelServiceTest {
         testModel.modelStatus = MLModelEntity.ModelStatus.DEPLOYED;
         when(mlModelRepo.findById("ml_test123")).thenReturn(Optional.of(testModel));
         when(mlModelRepo.save(any(MLModelEntity.class))).thenReturn(testModel);
-        doNothing().when(auditLogService).logUpdate(anyString(), anyString(), anyString(), anyString(), anyString(), any(), any());
+        lenient().when(auditLogService.logUpdate(nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), anyMap())).thenReturn(null);
 
         Map<String, Object> abTestConfig = new HashMap<>();
         abTestConfig.put("minSampleSize", 1000);
@@ -456,7 +456,7 @@ class MLModelServiceTest {
         testModel.trafficSplit = 50;
         when(mlModelRepo.findById("ml_test123")).thenReturn(Optional.of(testModel));
         when(mlModelRepo.save(any(MLModelEntity.class))).thenReturn(testModel);
-        doNothing().when(auditLogService).logUpdate(anyString(), anyString(), anyString(), anyString(), anyString(), any(), any());
+        lenient().when(auditLogService.logUpdate(nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), anyMap())).thenReturn(null);
 
         // When
         MLModelEntity result = mlModelService.stopAbTest("ml_test123", true, "test_user");

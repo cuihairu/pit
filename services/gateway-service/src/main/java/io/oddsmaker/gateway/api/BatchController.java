@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.oddsmaker.common.model.Event;
+import io.oddsmaker.gateway.config.BlockListClient;
 import io.oddsmaker.gateway.config.JsonSchemaValidator;
 import io.oddsmaker.gateway.config.PiiPolicy;
 import io.oddsmaker.gateway.config.PolicyService;
@@ -29,7 +30,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Collectors;
 import java.util.zip.GZIPInputStream;
 
 @RestController
@@ -42,6 +45,7 @@ public class BatchController {
     private final JsonSchemaValidator schemaValidator;
     private final PolicyService policyService;
     private final PiiPolicy piiPolicy;
+    private final BlockListClient blockListClient;
 
     public BatchController(
             ObjectMapper om,
@@ -50,7 +54,8 @@ public class BatchController {
             PropsPolicy propsPolicy,
             JsonSchemaValidator schemaValidator,
             PolicyService policyService,
-            PiiPolicy piiPolicy
+            PiiPolicy piiPolicy,
+            BlockListClient blockListClient
     ) {
         this.om = om;
         this.publisher = publisher;
@@ -59,6 +64,7 @@ public class BatchController {
         this.schemaValidator = schemaValidator;
         this.policyService = policyService;
         this.piiPolicy = piiPolicy;
+        this.blockListClient = blockListClient;
     }
 
     public static class BatchResponse {
@@ -74,7 +80,7 @@ public class BatchController {
             org.springframework.http.server.reactive.ServerHttpRequest req,
             @RequestBody Mono<byte[]> bodyBytesMono
     ) {
-        return bodyBytesMono.map(bytes -> {
+        return bodyBytesMono.flatMap(bytes -> {
             byte[] raw = maybeGunzip(bytes, encoding);
             if (propsPolicy.exceedsRequestLimit(raw)) {
                 throw new ResponseStatusException(org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE, "request_too_large");
@@ -87,10 +93,12 @@ public class BatchController {
             PolicyService.Policy policy = policyService.getPolicy(apiKey);
             PiiPolicy.Overrides piiOverrides = policyToOverrides(policy);
 
+            // 第一遍：规范化 + 基础校验 + 收集封禁检查目标
             BatchResponse resp = new BatchResponse();
+            List<Event> validEvents = new ArrayList<>();
             for (Event event : events) {
                 if (event == null) {
-                    continue;  // Skip null events
+                    continue;
                 }
                 normalizeCompatFields(event);
                 if (event.eventId == null || event.eventName == null || event.gameId == null || event.environment == null || event.deviceId == null) {
@@ -133,15 +141,70 @@ public class BatchController {
                     reject(resp, event, "invalid_schema");
                     continue;
                 }
-                try {
-                    publisher.publish(event);
-                    resp.accepted.add(event.eventId);
-                } catch (Exception ex) {
-                    reject(resp, event, "kafka_error");
+                validEvents.add(event);
+            }
+
+            // 没有有效事件，直接返回
+            if (validEvents.isEmpty()) {
+                return Mono.just(resp);
+            }
+
+            // 2) 构建封禁检查目标（device_id + user_id）
+            String gameId = validEvents.get(0).gameId;
+            List<BlockListClient.BatchTarget> targets = new ArrayList<>();
+            for (Event event : validEvents) {
+                if (event.deviceId != null && !event.deviceId.isEmpty()) {
+                    targets.add(new BlockListClient.BatchTarget("device_id", event.deviceId));
+                }
+                if (event.userId != null && !event.userId.isEmpty()) {
+                    targets.add(new BlockListClient.BatchTarget("player_id", event.userId));
                 }
             }
-            return resp;
+
+            // 无封禁检查目标 → 直接发布
+            if (targets.isEmpty()) {
+                for (Event event : validEvents) {
+                    try {
+                        publisher.publish(event);
+                        resp.accepted.add(event.eventId);
+                    } catch (Exception ex) {
+                        reject(resp, event, "kafka_error");
+                    }
+                }
+                return Mono.just(resp);
+            }
+
+            // 3) 批量检查封禁
+            return blockListClient.batchCheck(gameId, targets)
+                    .map(blockedMap -> {
+                        // 4) 处理事件：封禁的拒绝，非封禁的发布
+                        for (Event event : validEvents) {
+                            if (isBlocked(event, blockedMap)) {
+                                reject(resp, event, "blocked");
+                                continue;
+                            }
+                            try {
+                                publisher.publish(event);
+                                resp.accepted.add(event.eventId);
+                            } catch (Exception ex) {
+                                reject(resp, event, "kafka_error");
+                            }
+                        }
+                        return resp;
+                    });
         });
+    }
+
+    private boolean isBlocked(Event event, Map<String, Boolean> blockedMap) {
+        if (event.deviceId != null) {
+            Boolean b = blockedMap.get("device_id:" + event.deviceId);
+            if (Boolean.TRUE.equals(b)) return true;
+        }
+        if (event.userId != null) {
+            Boolean b = blockedMap.get("player_id:" + event.userId);
+            if (Boolean.TRUE.equals(b)) return true;
+        }
+        return false;
     }
 
     private List<Event> parseEvents(byte[] raw, String contentType) {

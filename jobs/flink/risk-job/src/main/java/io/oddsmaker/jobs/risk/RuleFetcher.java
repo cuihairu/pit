@@ -9,6 +9,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class RuleFetcher implements Runnable {
@@ -87,35 +89,32 @@ public class RuleFetcher implements Runnable {
         JsonNode arr = mapper.readTree(resp.body());
         if (!arr.isArray() || arr.isEmpty()) return;
 
-        RuleConfig base = RuleConfig.current();
-        BigDecimal amountThreshold = base.amountThreshold;
-        long freqMaxEvents = base.freqMaxEvents;
-        BigDecimal velocityMax = base.velocityMax;
-        BigDecimal ratioMax = base.ratioMax;
+        // 按 ruleType 收敛：同类型取 riskScore 最高的那条
+        Map<String, RuleConfig.RuleSpec> collected = new LinkedHashMap<>();
 
         for (JsonNode rule : arr) {
             String type = rule.path("ruleType").asText("");
+            if (type.isEmpty()) continue;
             int threshold = rule.path("triggerThreshold").asInt(0);
             if (threshold <= 0) continue;
-            switch (type) {
-                case "THRESHOLD":
-                    amountThreshold = BigDecimal.valueOf(threshold);
-                    break;
-                case "FREQUENCY":
-                    freqMaxEvents = threshold;
-                    break;
-                case "VELOCITY":
-                    velocityMax = BigDecimal.valueOf(threshold);
-                    break;
-                case "RATIO":
-                    ratioMax = BigDecimal.valueOf(threshold);
-                    break;
-                default:
-                    break;
+
+            String ruleId = rule.path("id").asText(null);
+            String actionType = rule.path("actionType").asText("ALERT");
+            int riskScore = rule.path("riskScore").asInt(0);
+            String riskLevel = rule.path("riskLevel").asText("MEDIUM");
+
+            // 同类型取 riskScore 最高的
+            RuleConfig.RuleSpec existing = collected.get(type);
+            if (existing == null || riskScore > existing.riskScore) {
+                collected.put(type, new RuleConfig.RuleSpec(
+                        ruleId, type, threshold, actionType, riskScore, riskLevel));
             }
         }
 
-        RuleConfig.update(new RuleConfig(amountThreshold, freqMaxEvents, velocityMax, ratioMax));
-        System.out.println("[rule-fetcher] rules refreshed from " + url + " (" + arr.size() + " rules)");
+        if (collected.isEmpty()) return;
+
+        RuleConfig.update(new RuleConfig(collected));
+        System.out.println("[rule-fetcher] rules refreshed from " + url
+                + " (" + arr.size() + " rules, " + collected.size() + " types active)");
     }
 }

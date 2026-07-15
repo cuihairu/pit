@@ -94,17 +94,21 @@ public class RiskJob {
         }).returns(Types.POJO(RiskInput.class));
 
         DataStream<RiskHit> thresholdHits = inputs
-                .filter(i -> i.amount != null && i.amount.compareTo(RuleConfig.current().amountThreshold) > 0)
+                .filter(i -> {
+                    RuleConfig.RuleSpec spec = RuleConfig.byType("THRESHOLD");
+                    return i.amount != null && i.amount.compareTo(BigDecimal.valueOf(spec.triggerThreshold)) > 0;
+                })
                 .map(i -> {
+                    RuleConfig.RuleSpec spec = RuleConfig.byType("THRESHOLD");
                     Map<String, String> ev = new HashMap<>();
                     ev.put("resource_amount", i.amount.toPlainString());
                     ev.put("event_name", i.eventName);
                     return new RiskHit(
                             i.gameId, i.environment, i.ts, UUID.randomUUID().toString(), i.eventId,
-                            "risk-threshold-amount", "THRESHOLD", "HIGH",
+                            spec.ruleId != null ? spec.ruleId : "risk-threshold-amount", "THRESHOLD", spec.riskLevel,
                             subjectType(i), subjectId(i),
-                            80f, "ALERT",
-                            "resource amount " + i.amount.toPlainString() + " exceeds threshold " + RuleConfig.current().amountThreshold.toPlainString(),
+                            spec.riskScore, spec.actionType,
+                            "resource amount " + i.amount.toPlainString() + " exceeds threshold " + spec.triggerThreshold,
                             ev);
                 }).returns(Types.POJO(RiskHit.class));
 
@@ -118,13 +122,14 @@ public class RiskJob {
                     }
                     @Override
                     public void process(String key, Context ctx, Iterable<RiskInput> events, Collector<RiskHit> out) {
+                        RuleConfig.RuleSpec spec = RuleConfig.byType("FREQUENCY");
                         long count = 0;
                         RiskInput last = null;
                         for (RiskInput e : events) {
                             count++;
                             last = e;
                         }
-                        long limit = RuleConfig.current().freqMaxEvents;
+                        int limit = spec.triggerThreshold;
                         if (count > limit && last != null) {
                             Map<String, String> ev = new HashMap<>();
                             ev.put("window_events", String.valueOf(count));
@@ -132,9 +137,9 @@ public class RiskJob {
                             ev.put("subject", subjectKey(last));
                             out.collect(new RiskHit(
                                     last.gameId, last.environment, last.ts, UUID.randomUUID().toString(), last.eventId,
-                                    "risk-frequency-burst", "FREQUENCY", "MEDIUM",
+                                    spec.ruleId != null ? spec.ruleId : "risk-frequency-burst", "FREQUENCY", spec.riskLevel,
                                     subjectType(last), subjectId(last),
-                                    60f, "ALERT",
+                                    spec.riskScore, spec.actionType,
                                     "event burst " + count + " in " + freqWindowMin + "min (limit " + limit + ")",
                                     ev));
                         }
@@ -152,6 +157,7 @@ public class RiskJob {
                     }
                     @Override
                     public void process(String key, Context ctx, Iterable<RiskInput> events, Collector<RiskHit> out) {
+                        RuleConfig.RuleSpec spec = RuleConfig.byType("VELOCITY");
                         BigDecimal sum = BigDecimal.ZERO;
                         long count = 0;
                         RiskInput last = null;
@@ -160,7 +166,7 @@ public class RiskJob {
                             count++;
                             last = e;
                         }
-                        BigDecimal limit = RuleConfig.current().velocityMax;
+                        BigDecimal limit = BigDecimal.valueOf(spec.triggerThreshold);
                         if (sum.compareTo(limit) > 0 && last != null) {
                             Map<String, String> ev = new HashMap<>();
                             ev.put("window_sum", sum.toPlainString());
@@ -169,9 +175,9 @@ public class RiskJob {
                             ev.put("subject", subjectKey(last));
                             out.collect(new RiskHit(
                                     last.gameId, last.environment, last.ts, UUID.randomUUID().toString(), last.eventId,
-                                    "risk-velocity-amount", "VELOCITY", "HIGH",
+                                    spec.ruleId != null ? spec.ruleId : "risk-velocity-amount", "VELOCITY", spec.riskLevel,
                                     subjectType(last), subjectId(last),
-                                    75f, "ALERT",
+                                    spec.riskScore, spec.actionType,
                                     "resource velocity " + sum.toPlainString() + " in " + freqWindowMin + "min exceeds " + limit.toPlainString(),
                                     ev));
                         }
@@ -190,6 +196,7 @@ public class RiskJob {
                     }
                     @Override
                     public void process(String key, Context ctx, Iterable<RiskInput> events, Collector<RiskHit> out) {
+                        RuleConfig.RuleSpec spec = RuleConfig.byType("RATIO");
                         BigDecimal sourceSum = BigDecimal.ZERO;
                         BigDecimal sinkSum = BigDecimal.ZERO;
                         RiskInput last = null;
@@ -200,7 +207,7 @@ public class RiskJob {
                         }
                         if (sinkSum.compareTo(BigDecimal.ZERO) > 0 && last != null) {
                             BigDecimal ratio = sourceSum.divide(sinkSum, 2, RoundingMode.HALF_UP);
-                            BigDecimal limit = RuleConfig.current().ratioMax;
+                            BigDecimal limit = BigDecimal.valueOf(spec.triggerThreshold);
                             if (ratio.compareTo(limit) > 0) {
                                 Map<String, String> ev = new HashMap<>();
                                 ev.put("source_sum", sourceSum.toPlainString());
@@ -210,9 +217,9 @@ public class RiskJob {
                                 ev.put("subject", subjectKey(last));
                                 out.collect(new RiskHit(
                                         last.gameId, last.environment, last.ts, UUID.randomUUID().toString(), last.eventId,
-                                        "risk-ratio-source-sink", "RATIO", "MEDIUM",
+                                        spec.ruleId != null ? spec.ruleId : "risk-ratio-source-sink", "RATIO", spec.riskLevel,
                                         subjectType(last), subjectId(last),
-                                        65f, "ALERT",
+                                        spec.riskScore, spec.actionType,
                                         "source/sink ratio " + ratio.toPlainString() + " in " + freqWindowMin + "min exceeds " + limit.toPlainString(),
                                         ev));
                             }
@@ -276,11 +283,11 @@ public class RiskJob {
         return subjectType(i) + ":" + subjectId(i);
     }
 
-    private static String str(Object v) { return v == null ? null : v.toString(); }
+    static String str(Object v) { return v == null ? null : v.toString(); }
 
-    private static String nz(String s) { return s == null ? "" : s; }
+    static String nz(String s) { return s == null ? "" : s; }
 
-    private static BigDecimal parseAmount(Object v) {
+    static BigDecimal parseAmount(Object v) {
         if (v == null) return null;
         try { return new BigDecimal(v.toString()); } catch (Exception e) { return null; }
     }

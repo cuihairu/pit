@@ -194,7 +194,7 @@ class PerformanceMonitorServiceTest {
 
         assertNotNull(amountCounter);
         assertNotNull(countCounter);
-        assertEquals(9.99, amountCounter.totalAmount(), 0.01);
+        assertEquals(9.99, amountCounter.count(), 0.01);
         assertEquals(1.0, countCounter.count());
     }
 

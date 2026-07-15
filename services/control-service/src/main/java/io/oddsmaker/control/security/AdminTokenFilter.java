@@ -35,8 +35,8 @@ public class AdminTokenFilter extends OncePerRequestFilter {
         if (path.startsWith("/api/config/")) {
             return true;
         }
-        // 只处理API请求
-        return !(path.startsWith("/api/"));
+        // 只处理 API 和内部端点的请求
+        return !path.startsWith("/api/") && !path.startsWith("/internal/");
     }
 
     @Override
