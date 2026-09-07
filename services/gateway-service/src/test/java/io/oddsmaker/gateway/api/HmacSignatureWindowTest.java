@@ -34,7 +34,7 @@ class HmacSignatureWindowTest {
 
     @Test
     void validSignatureWithinWindowAccepted() {
-        when(authService.getSecret("pk_hmac")).thenReturn("sek");
+        when(authService.getContext("pk_hmac")).thenReturn(newContext("sek"));
         String body = "{" +
                 "\"event_id\":\"01JHMACOK\",\"event_name\":\"level_start\",\"game_id\":\"game_demo\",\"environment\":\"prod\",\"device_id\":\"d1\",\"ts_client\":1730000000000}";
         long t = Instant.now().getEpochSecond();
@@ -51,7 +51,7 @@ class HmacSignatureWindowTest {
 
     @Test
     void expiredSignatureRejected() {
-        when(authService.getSecret("pk_hmac")).thenReturn("sek");
+        when(authService.getContext("pk_hmac")).thenReturn(newContext("sek"));
         String body = "{" +
                 "\"event_id\":\"01JHMACEX\",\"event_name\":\"level_start\",\"game_id\":\"game_demo\",\"environment\":\"prod\",\"device_id\":\"d1\",\"ts_client\":\"1730000000000\"}";
         long t = Instant.now().getEpochSecond() - 400; // > 300s window
@@ -64,5 +64,13 @@ class HmacSignatureWindowTest {
                 .bodyValue(body)
                 .exchange()
                 .expectStatus().isUnauthorized();
+    }
+
+    private static AuthService.ApiKeyContext newContext(String secret) {
+        AuthService.ApiKeyContext ctx = new AuthService.ApiKeyContext();
+        ctx.apiKey = "pk_hmac";
+        ctx.secret = secret;
+        ctx.canWrite = true;
+        return ctx;
     }
 }

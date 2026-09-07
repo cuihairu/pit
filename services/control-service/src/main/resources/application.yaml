@@ -63,6 +63,9 @@ oddsmaker:
   admin:
     # 管理令牌 - 生产环境必须更换
     token: ${ODDSMAKER_ADMIN_TOKEN:admin}
+  internal:
+    # Gateway 等服务间调用必须显式配置；留空时 /internal/** 默认拒绝。
+    token: ${ODDSMAKER_INTERNAL_TOKEN:}
 
   company:
     # 单公司部署元信息

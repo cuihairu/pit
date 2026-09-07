@@ -56,6 +56,21 @@ public class ControlService {
         return keyRepo.findById(apiKey).map(this::toDetail).orElse(null);
     }
 
+    /**
+     * 返回 Gateway 校验事件所需的最小凭据视图。
+     * 密钥仅能由受服务间认证保护的内部端点读取。
+     */
+    @Transactional(readOnly = true)
+    public Models.InternalApiKeyResp getActiveKeyForGateway(String apiKey) {
+        return keyRepo.findById(apiKey)
+            .filter(ApiKeyEntity::isActive)
+            .flatMap(key -> envRepo.findById(key.environmentId)
+                .filter(environment -> environment.deletedAt == null)
+                .filter(environment -> Objects.equals(environment.gameId, key.gameId))
+                .map(environment -> toInternalDetail(key, environment)))
+            .orElse(null);
+    }
+
     public List<Models.KeyDetailResp> listKeys() {
         return keyRepo.findAll().stream().map(this::toDetail).collect(Collectors.toList());
     }
@@ -185,7 +200,7 @@ public class ControlService {
 
     private Models.KeyDetailResp toDetail(ApiKeyEntity e) {
         Models.KeyDetailResp r = new Models.KeyDetailResp();
-        r.apiKey = e.apiKey; r.secret = e.secret;
+        r.apiKey = e.apiKey;
         r.gameId = e.gameId; r.environmentId = e.environmentId;
         r.storageProfileId = storageProfileIdFor(e.environmentId);
         r.rpm = e.rpm; r.ipRpm = e.ipRpm;
@@ -193,6 +208,25 @@ public class ControlService {
         r.piiEmail = e.piiEmail; r.piiPhone = e.piiPhone; r.piiIp = e.piiIp;
         r.denyKeys = split(e.denyKeys); r.maskKeys = split(e.maskKeys);
         return r;
+    }
+
+    private Models.InternalApiKeyResp toInternalDetail(ApiKeyEntity key, GameEnvironmentEntity environment) {
+        Models.InternalApiKeyResp out = new Models.InternalApiKeyResp();
+        out.apiKey = key.apiKey;
+        out.secret = key.secret;
+        out.gameId = key.gameId;
+        out.environment = environment.name;
+        out.canWrite = key.canWrite;
+        out.requireHmac = key.requireHmac;
+        out.rpm = key.rpm;
+        out.ipRpm = key.ipRpm;
+        out.propsAllowlist = split(key.propsAllowlist);
+        out.piiEmail = key.piiEmail;
+        out.piiPhone = key.piiPhone;
+        out.piiIp = key.piiIp;
+        out.denyKeys = split(key.denyKeys);
+        out.maskKeys = split(key.maskKeys);
+        return out;
     }
 
     private Models.StorageProfileResp toStorageProfile(StorageProfileEntity entity) {

@@ -25,7 +25,6 @@ public class Models {
 
     public static class KeyDetailResp {
         public String apiKey;
-        public String secret;
         public String gameId;
         public String environmentId;
         public String storageProfileId;
@@ -35,6 +34,27 @@ public class Models {
         public String piiEmail;  // allow|mask|drop
         public String piiPhone;  // allow|mask|drop
         public String piiIp;     // allow|coarse|drop
+        public List<String> denyKeys;
+        public List<String> maskKeys;
+    }
+
+    /**
+     * Gateway 专用的内部凭据视图。
+     * 仅允许通过受服务间令牌保护的 /internal 接口读取，绝不能由管理 API 返回。
+     */
+    public static class InternalApiKeyResp {
+        public String apiKey;
+        public String secret;
+        public String gameId;
+        public String environment;
+        public Boolean canWrite;
+        public Boolean requireHmac;
+        public Integer rpm;
+        public Integer ipRpm;
+        public List<String> propsAllowlist;
+        public String piiEmail;
+        public String piiPhone;
+        public String piiIp;
         public List<String> denyKeys;
         public List<String> maskKeys;
     }

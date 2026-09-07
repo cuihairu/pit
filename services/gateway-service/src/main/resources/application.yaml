@@ -35,9 +35,10 @@ oddsmaker:
     ip-rpm: 300        # per client IP per minute
   control:
     url: http://localhost:8085
+    internal-token: ${ODDSMAKER_INTERNAL_TOKEN:}
   blocklist:
     enabled: true
-    admin-token: ${ODDSMAKER_ADMIN_TOKEN:admin}
+    internal-token: ${ODDSMAKER_INTERNAL_TOKEN:}
     timeout-ms: 200
     cache-ttl-seconds: 15
   props:

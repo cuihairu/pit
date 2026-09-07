@@ -32,7 +32,7 @@ public class BlockListClient {
     private static final Logger log = LoggerFactory.getLogger(BlockListClient.class);
 
     private final WebClient client;
-    private final String adminToken;
+    private final String internalToken;
     private final boolean enabled;
     private final int cacheTtlSeconds;
     private final Duration timeout;
@@ -47,7 +47,7 @@ public class BlockListClient {
 
     public BlockListClient(Environment env) {
         String controlUrl = env.getProperty("oddsmaker.control.url", "http://localhost:8085");
-        this.adminToken = env.getProperty("oddsmaker.blocklist.admin-token", "");
+        this.internalToken = env.getProperty("oddsmaker.blocklist.internal-token", "");
         this.enabled = env.getProperty("oddsmaker.blocklist.enabled", boolean.class, true);
         this.cacheTtlSeconds = env.getProperty("oddsmaker.blocklist.cache-ttl-seconds", int.class, 15);
         long timeoutMs = env.getProperty("oddsmaker.blocklist.timeout-ms", long.class, 200L);
@@ -121,7 +121,7 @@ public class BlockListClient {
 
         return client.post()
                 .uri("/internal/block-lists/batch-check")
-                .header("x-admin-token", adminToken)
+                .header("x-internal-token", internalToken)
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
                 .retrieve()

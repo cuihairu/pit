@@ -33,12 +33,16 @@ public class HmacFilter implements WebFilter {
 
         String apiKey = exchange.getRequest().getHeaders().getFirst("x-api-key");
         if (apiKey == null) return unauthorized(exchange, "missing_api_key");
-        String secret = authService.getSecret(apiKey);
-        if (secret == null) return unauthorized(exchange, "invalid_api_key");
+        AuthService.ApiKeyContext keyContext = authService.getContext(apiKey);
+        if (keyContext == null || !keyContext.allowsWrite()) return unauthorized(exchange, "invalid_api_key");
+        exchange.getAttributes().put("oddsmaker.api_key_context", keyContext);
+        String secret = keyContext.secret;
 
         String sig = exchange.getRequest().getHeaders().getFirst("x-signature");
         if (sig == null || sig.isEmpty()) {
-            // 签名可选：未提供则放行（可按需改为强制）
+            if (Boolean.TRUE.equals(keyContext.requireHmac)) {
+                return unauthorized(exchange, "missing_signature");
+            }
             return chain.filter(exchange);
         }
 

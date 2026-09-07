@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.oddsmaker.common.model.Event;
 import io.oddsmaker.gateway.config.BlockListClient;
+import io.oddsmaker.gateway.config.AuthService;
 import io.oddsmaker.gateway.config.JsonSchemaValidator;
 import io.oddsmaker.gateway.config.PiiPolicy;
 import io.oddsmaker.gateway.config.PolicyService;
@@ -78,6 +79,7 @@ public class BatchController {
             @RequestHeader(value = "content-encoding", required = false) String encoding,
             @RequestHeader(value = "content-type", required = false) String contentType,
             org.springframework.http.server.reactive.ServerHttpRequest req,
+            org.springframework.web.server.ServerWebExchange exchange,
             @RequestBody Mono<byte[]> bodyBytesMono
     ) {
         return bodyBytesMono.flatMap(bytes -> {
@@ -90,6 +92,8 @@ public class BatchController {
             String userAgent = req.getHeaders().getFirst("user-agent");
             String clientIp = extractClientIp(req);
             String apiKey = req.getHeaders().getFirst("x-api-key");
+            AuthService.ApiKeyContext keyContext = (AuthService.ApiKeyContext) exchange.getAttributes()
+                .get("oddsmaker.api_key_context");
             PolicyService.Policy policy = policyService.getPolicy(apiKey);
             PiiPolicy.Overrides piiOverrides = policyToOverrides(policy);
 
@@ -103,6 +107,10 @@ public class BatchController {
                 normalizeCompatFields(event);
                 if (event.eventId == null || event.eventName == null || event.gameId == null || event.environment == null || event.deviceId == null) {
                     reject(resp, event, "invalid_schema");
+                    continue;
+                }
+                if (!matchesApiKeyScope(event, keyContext)) {
+                    reject(resp, event, "api_key_scope_mismatch");
                     continue;
                 }
                 if (event.eventType == null || event.eventType.isBlank()) {
@@ -205,6 +213,14 @@ public class BatchController {
             if (Boolean.TRUE.equals(b)) return true;
         }
         return false;
+    }
+
+    private boolean matchesApiKeyScope(Event event, AuthService.ApiKeyContext keyContext) {
+        if (keyContext == null || !keyContext.isScoped()) {
+            return true;
+        }
+        return keyContext.gameId.equals(event.gameId)
+            && keyContext.environment.equals(event.environment);
     }
 
     private List<Event> parseEvents(byte[] raw, String contentType) {

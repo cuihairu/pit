@@ -15,6 +15,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.List;
 
 /**
@@ -23,10 +24,12 @@ import java.util.List;
  */
 @Component
 public class AdminTokenFilter extends OncePerRequestFilter {
-    private final String token;
+    private final String adminToken;
+    private final String internalToken;
 
     public AdminTokenFilter(Environment env) {
-        this.token = Binder.get(env).bind("oddsmaker.admin.token", String.class).orElse("");
+        this.adminToken = Binder.get(env).bind("oddsmaker.admin.token", String.class).orElse("");
+        this.internalToken = Binder.get(env).bind("oddsmaker.internal.token", String.class).orElse("");
     }
 
     @Override
@@ -47,8 +50,24 @@ public class AdminTokenFilter extends OncePerRequestFilter {
             return;
         }
 
-        // 如果没有配置Admin Token，开发模式自动认证
-        if (token == null || token.isEmpty()) {
+        String path = request.getRequestURI();
+        if (path.startsWith("/internal/")) {
+            String suppliedToken = request.getHeader("x-internal-token");
+            if (matches(suppliedToken, internalToken)) {
+                var auth = new UsernamePasswordAuthenticationToken(
+                    "internal-gateway", null,
+                    List.of(new SimpleGrantedAuthority("ROLE_INTERNAL"))
+                );
+                SecurityContextHolder.getContext().setAuthentication(auth);
+                filterChain.doFilter(request, response);
+                return;
+            }
+            unauthorized(response, "missing_or_invalid_internal_token");
+            return;
+        }
+
+        // 如果没有配置 Admin Token，开发模式自动认证。
+        if (adminToken == null || adminToken.isEmpty()) {
             // 开发模式 - 设置匿名认证
             var auth = new UsernamePasswordAuthenticationToken(
                 "dev-admin", null,
@@ -61,7 +80,7 @@ public class AdminTokenFilter extends OncePerRequestFilter {
 
         // 检查x-admin-token头
         String hdr = request.getHeader("x-admin-token");
-        if (hdr != null && hdr.equals(token)) {
+        if (matches(hdr, adminToken)) {
             // 有效的Admin Token - 设置认证
             var auth = new UsernamePasswordAuthenticationToken(
                 "admin", null,
@@ -73,9 +92,23 @@ public class AdminTokenFilter extends OncePerRequestFilter {
         }
 
         // 没有有效的认证
+        unauthorized(response, "missing_or_invalid_admin_token");
+    }
+
+    private boolean matches(String supplied, String expected) {
+        if (supplied == null || supplied.isEmpty() || expected == null || expected.isEmpty()) {
+            return false;
+        }
+        return MessageDigest.isEqual(
+            supplied.getBytes(StandardCharsets.UTF_8),
+            expected.getBytes(StandardCharsets.UTF_8)
+        );
+    }
+
+    private void unauthorized(HttpServletResponse response, String message) throws IOException {
         response.setStatus(401);
         response.setContentType("application/json");
-        String json = "{\"code\":\"unauthorized\",\"message\":\"missing_or_invalid_admin_token\"}";
+        String json = "{\"code\":\"unauthorized\",\"message\":\"" + message + "\"}";
         response.getOutputStream().write(json.getBytes(StandardCharsets.UTF_8));
     }
 }
