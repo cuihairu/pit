@@ -13,7 +13,7 @@
 
 ## P1 单公司多游戏控制面
 
-- [ ] Game API：游戏增删改查、状态、平台、默认时区、默认货币
+- [x] Game API：游戏增删改查、状态、平台、默认时区、默认货币
 - [ ] Environment API：`dev/staging/prod` 配置、采样、数据保留、策略绑定
 - [x] API Key 管理：绑定 `(game_id, environment)`，区分 `client/server/admin`
 - [ ] Tracking Plan：事件名、字段字典、枚举、cardinality 上限

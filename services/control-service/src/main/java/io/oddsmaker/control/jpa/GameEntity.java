@@ -75,6 +75,12 @@ public class GameEntity {
     @Column(name = "default_currency", length = 10)
     public String defaultCurrency = "USD";
 
+    /**
+     * 默认时区（IANA 时区标识，如 Asia/Shanghai、UTC）
+     */
+    @Column(name = "default_timezone", length = 64)
+    public String defaultTimezone = "UTC";
+
     @Column(name = "virtual_currencies")
     public String virtualCurrencies; // JSON格式存储: ["coins", "gems", "energy"]
 

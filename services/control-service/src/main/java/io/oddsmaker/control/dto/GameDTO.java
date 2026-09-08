@@ -42,6 +42,10 @@ public class GameDTO {
     // 游戏专业配置
     @Pattern(regexp = "^[A-Z]{3}$", message = "货币代码必须是3位大写字母")
     public String defaultCurrency;
+
+    @Pattern(regexp = "^[A-Za-z0-9_+\\-/]+$", message = "时区必须是有效的IANA时区标识，如 Asia/Shanghai")
+    public String defaultTimezone;
+
     public String virtualCurrencies; // JSON数组字符串
 
     @Min(value = 1, message = "最大等级至少为1")
@@ -94,6 +98,7 @@ public class GameDTO {
         this.googlePlayUrl = entity.googlePlayUrl;
         this.steamUrl = entity.steamUrl;
         this.defaultCurrency = entity.defaultCurrency;
+        this.defaultTimezone = entity.defaultTimezone;
         this.virtualCurrencies = entity.virtualCurrencies;
         this.maxLevel = entity.maxLevel;
         this.hasMultiplayer = entity.hasMultiplayer;
@@ -129,6 +134,7 @@ public class GameDTO {
         entity.googlePlayUrl = this.googlePlayUrl;
         entity.steamUrl = this.steamUrl;
         entity.defaultCurrency = this.defaultCurrency != null ? this.defaultCurrency : "USD";
+        entity.defaultTimezone = this.defaultTimezone != null ? this.defaultTimezone : "UTC";
         entity.virtualCurrencies = this.virtualCurrencies;
         entity.maxLevel = this.maxLevel;
         entity.hasMultiplayer = this.hasMultiplayer != null ? this.hasMultiplayer : false;
@@ -161,6 +167,7 @@ public class GameDTO {
         if (this.googlePlayUrl != null) entity.googlePlayUrl = this.googlePlayUrl;
         if (this.steamUrl != null) entity.steamUrl = this.steamUrl;
         if (this.defaultCurrency != null) entity.defaultCurrency = this.defaultCurrency;
+        if (this.defaultTimezone != null) entity.defaultTimezone = this.defaultTimezone;
         if (this.virtualCurrencies != null) entity.virtualCurrencies = this.virtualCurrencies;
         if (this.maxLevel != null) entity.maxLevel = this.maxLevel;
         if (this.hasMultiplayer != null) entity.hasMultiplayer = this.hasMultiplayer;

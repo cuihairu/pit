@@ -41,6 +41,9 @@ public class GameService {
     @Autowired
     private StorageProfileRepo storageProfileRepo;
 
+    @Autowired
+    private AuditLogService auditLog;
+
     private static final String SHARED_NONPROD_PROFILE_ID = "shared-nonprod";
     private static final String SHARED_PROD_PROFILE_ID = "shared-prod";
 
@@ -61,6 +64,7 @@ public class GameService {
         }
 
         // 转换并保存
+        validateTimezone(dto.defaultTimezone);
         GameEntity entity = dto.toEntity();
         entity = gameRepo.save(entity);
 
@@ -68,6 +72,11 @@ public class GameService {
         ensureDefaultStorageProfiles();
         createDefaultEnvironments(entity.id);
 
+        auditLog.logCreate("game", entity.id, entity.name, "api", "api", null,
+            Map.of("gameId", entity.id, "status", entity.status.name(),
+                   "platforms", String.valueOf(entity.platforms),
+                   "defaultCurrency", String.valueOf(entity.defaultCurrency),
+                   "defaultTimezone", String.valueOf(entity.defaultTimezone)));
         logger.info("Game created successfully: {} (ID: {})", entity.name, entity.id);
         return new GameDTO(entity);
     }
@@ -87,9 +96,16 @@ public class GameService {
             validateStatusChange(entity, dto.status);
         }
 
+        validateTimezone(dto.defaultTimezone);
+        String beforeStatus = entity.status.name();
         dto.updateEntity(entity);
         entity = gameRepo.save(entity);
 
+        auditLog.logUpdate("game", entity.id, entity.name, "api", "api", null,
+            Map.of("gameId", entity.id, "statusBefore", beforeStatus,
+                   "statusAfter", entity.status.name(),
+                   "defaultCurrency", String.valueOf(entity.defaultCurrency),
+                   "defaultTimezone", String.valueOf(entity.defaultTimezone)));
         logger.info("Game updated successfully: {}", gameId);
         return new GameDTO(entity);
     }
@@ -117,6 +133,7 @@ public class GameService {
         // 软删除相关环境和API密钥
         softDeleteRelatedResources(gameId);
 
+        auditLog.logDelete("game", entity.id, entity.name, "api", "api", null);
         logger.info("Game deleted successfully: {}", gameId);
     }
 
@@ -316,6 +333,8 @@ public class GameService {
         }
         entity = gameRepo.save(entity);
 
+        auditLog.logUpdate("game", entity.id, entity.name, "api", "api", null,
+            Map.of("gameId", entity.id, "action", "publish"));
         logger.info("Game published successfully: {}", gameId);
         return new GameDTO(entity);
     }
@@ -337,6 +356,8 @@ public class GameService {
         entity.status = GameEntity.GameStatus.MAINTENANCE;
         entity = gameRepo.save(entity);
 
+        auditLog.logUpdate("game", entity.id, entity.name, "api", "api", null,
+            Map.of("gameId", entity.id, "action", "unpublish"));
         logger.info("Game unpublished successfully: {}", gameId);
         return new GameDTO(entity);
     }
@@ -525,6 +546,18 @@ public class GameService {
         profile.redisCluster = redisCluster;
         profile.archiveBucket = archiveBucket;
         storageProfileRepo.save(profile);
+    }
+
+    /**
+     * 校验 IANA 时区标识（如 Asia/Shanghai、UTC）
+     */
+    private void validateTimezone(String timezone) {
+        if (timezone == null || timezone.isBlank()) {
+            return;
+        }
+        if (!java.time.ZoneId.getAvailableZoneIds().contains(timezone.trim())) {
+            throw new IllegalArgumentException("Unknown timezone: " + timezone + " (expected IANA id, e.g. Asia/Shanghai)");
+        }
     }
 
     /**
