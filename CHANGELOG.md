@@ -1,6 +1,7 @@
 # Changelog
 
 ## v0.2.0 (unreleased)
+- 公告系统（P4）：全生命周期管理——创建（草稿/定时）、立即发布、改期、手动下线、软删除；sweep 每分钟扫描驱动 SCHEDULED→PUBLISHED 与 autoOfflineAt 到点下线；游戏服经 `GET /api/announcements/active` 拉取展示窗口内公告（环境匹配或全环境）；状态机约束（OFFLINE 不可复活、PUBLISHED 不可直接删）；增删改与自动迁移全量审计
 - 留存分析补齐 Rolling 口径：RetentionPolicy 抽取纯逻辑（可配 N-Day `retention.ndays`、Rolling `retention.rolling.ndays`）；Rolling 语义为第 N 天及以后任意一天活跃，最后活跃日跨越阈值时补记；新增 `retention_rolling` CH 表
 - 漏斗补齐无序口径：FunnelType 新增 UNORDERED；STANDARD/UNORDERED 走任意顺序完成判定（UnorderedFunnelLogic：全步骤完成 + 时间跨度约束，超窗重置，每用户一次转化）；SEQUENTIAL/TIME_WINDOW 保持原顺序推进逻辑
 - 事件类型推断补全九类：inferEventType 新增 user/resource/design 映射（session/user/business/resource/progression/design/error/ad/risk + experiment 附加）
