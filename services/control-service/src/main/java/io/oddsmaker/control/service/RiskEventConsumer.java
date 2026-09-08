@@ -6,6 +6,8 @@ import io.oddsmaker.control.jpa.AuditLogEntity;
 import io.oddsmaker.control.jpa.BlockListEntity;
 import io.oddsmaker.control.jpa.IdentityLinkEntity;
 import io.oddsmaker.control.jpa.IdentityLinkRepo;
+import io.oddsmaker.control.jpa.RiskCaseEntity;
+import io.oddsmaker.control.jpa.RiskCaseRepo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,7 +21,9 @@ import java.util.Map;
 /**
  * 风控事件消费者
  * 消费 Flink RiskJob 产出到 oddsmaker.risk_events topic 的 JSON 消息，
- * 按 action 分发处置：BLOCK→封禁名单、WEBHOOK→Webhook 通知、ALERT/REVIEW/THROTTLE→审计日志。
+ * 按 action 分发处置：BLOCK→封禁名单、REVIEW→审核队列、WEBHOOK→通知、
+ * THROTTLE/MARK→审计+指令下发；block/review/mark/throttle 均通过 risk_action
+ * webhook 输出到游戏服执行。
  */
 @Component
 public class RiskEventConsumer {
@@ -40,6 +44,12 @@ public class RiskEventConsumer {
 
     @Autowired
     private IdentityLinkRepo identityLinkRepo;
+
+    @Autowired
+    private RiskCaseRepo riskCaseRepo;
+
+    @Autowired
+    private ReviewQueueService reviewQueueService;
 
     /** 身份关联扩散封禁开关（默认关：共享设备可能关联大量玩家，灰度后再开）。 */
     @Value("${oddsmaker.risk.identity-extend:false}")
@@ -67,13 +77,23 @@ public class RiskEventConsumer {
             switch (event.action.toUpperCase()) {
                 case "BLOCK":
                     handleBlock(event);
+                    notifyGameServer(event, outcome("block", "blocked"));
                     break;
                 case "WEBHOOK":
                     handleWebhook(event);
                     break;
-                case "ALERT":
                 case "REVIEW":
+                    handleReview(event);
+                    break;
                 case "THROTTLE":
+                    handleAuditOnly(event);
+                    notifyGameServer(event, outcome("throttle", "throttled"));
+                    break;
+                case "MARK":
+                    handleAuditOnly(event);
+                    notifyGameServer(event, outcome("mark", "marked"));
+                    break;
+                case "ALERT":
                     handleAuditOnly(event);
                     break;
                 default:
@@ -83,6 +103,73 @@ public class RiskEventConsumer {
             }
         } catch (Exception e) {
             logger.error("Failed to handle risk event {}: {}", event.riskEventId, e.getMessage(), e);
+        }
+    }
+
+    /** 构造下发游戏服的处置结果说明 */
+    private Map<String, Object> outcome(String action, String state) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("action", action);
+        m.put("state", state);
+        return m;
+    }
+
+    /**
+     * 风控动作闭环输出：将处置结果（block/review/mark/throttle）通过 webhook 通知游戏服，
+     * 游戏服据此执行踢线、限制功能、打标或降频上报。
+     */
+    private void notifyGameServer(RiskEventDto event, Map<String, Object> extra) {
+        try {
+            Map<String, Object> payload = buildWebhookPayload(event);
+            payload.put("event_type", "risk_action");
+            payload.putAll(extra);
+            webhookService.sendCustomWebhook(event.gameId, "risk_action", payload);
+            logger.info("risk_action webhook sent: action={}, subject={}:{}",
+                extra.get("action"), event.subjectType, event.subjectId);
+        } catch (Exception e) {
+            // 通知失败不阻断本地处置
+            logger.warn("risk_action webhook failed (non-fatal): {}", e.getMessage());
+        }
+    }
+
+    /**
+     * REVIEW 动作：创建风控案件并进入人工审核队列，同时通知游戏服。
+     */
+    private void handleReview(RiskEventDto event) {
+        String targetType = switch (event.subjectType != null ? event.subjectType.toUpperCase() : "") {
+            case "PLAYER" -> "player_id";
+            case "DEVICE" -> "device_id";
+            default -> event.subjectType != null ? event.subjectType.toLowerCase() : "unknown";
+        };
+
+        RiskCaseEntity riskCase = new RiskCaseEntity();
+        riskCase.id = "rc_" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        riskCase.gameId = event.gameId;
+        riskCase.environmentId = event.environment;
+        riskCase.riskRuleId = event.ruleId;
+        riskCase.caseNumber = "CASE_" + System.currentTimeMillis();
+        riskCase.targetType = targetType;
+        riskCase.targetId = event.subjectId;
+        riskCase.triggerEventId = event.sourceEventId;
+        riskCase.actionDescription = event.reason;
+        riskCase.riskLevel = parseRiskLevel(event.severity);
+        riskCase.actionTaken = RiskCaseEntity.ActionType.REVIEW;
+        riskCase.executionStatus = RiskCaseEntity.ExecutionStatus.PENDING;
+        riskCase = riskCaseRepo.save(riskCase);
+
+        reviewQueueService.addToQueue(riskCase,
+            riskCase.riskLevel == RiskCaseEntity.RiskLevel.CRITICAL ? 1 : 2,
+            "risk_automation", "fraud");
+        handleAuditOnly(event);
+        notifyGameServer(event, outcome("review", "queued"));
+    }
+
+    private RiskCaseEntity.RiskLevel parseRiskLevel(String severity) {
+        if (severity == null) return RiskCaseEntity.RiskLevel.MEDIUM;
+        try {
+            return RiskCaseEntity.RiskLevel.valueOf(severity.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return RiskCaseEntity.RiskLevel.MEDIUM;
         }
     }
 

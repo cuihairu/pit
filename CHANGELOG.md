@@ -1,6 +1,9 @@
 # Changelog
 
 ## v0.2.0 (unreleased)
+- Gateway 风控前置：新增 ReplayGuard（签名重放 401 replay_detected、event_id 幂等吸收计入 duplicates），事件时间戳信差 ±24h 检查（invalid_timestamp）；黑名单/签名时间窗/非法环境/body size 此前已具备
+- Flink risk job 新增两类检测：DUPLICATE_RECEIPT（同 subject 同 receipt_hash/order_id 窗口内 ≥2 次，CRITICAL/REVIEW）、AD_REWARD（激励广告 reward 窗口超频，HIGH/ALERT）；RuleConfig 默认兜底同步扩展
+- 风控 Webhook 闭环：BLOCK/REVIEW/MARK/THROTTLE 处置后统一通过 `risk_action` webhook 输出到游戏服；REVIEW 升级为创建 RiskCase 进入审核队列（CRITICAL 优先级 1）；新增 MARK 动作分发
 - 公司内 RBAC 落地：六角色权限矩阵（owner/operator/analyst/developer/risk_admin/viewer），支持 global/game/environment 三级 scope 分配与精确回收；新增 `/api/users/{userId}/role-assignments` API，GRANT_ROLE/REVOKE_ROLE 全量审计
 - 修复失效鉴权：RiskRuleController/ReportController 的 `@PreAuthorize(hasAuthority(...))` 无 authority 供给（实际永远拒绝），替换为 AccessGuard 显式 scope 检查；SecurityException 统一映射 403
 - 审计日志补齐密钥与环境资源：API Key 创建/策略变更/删除、环境创建/更新/删除全量记录（含变更前后值）

@@ -90,6 +90,13 @@ public class RiskJob {
             if (tsServer != null) in.ts = new Timestamp(tsServer / 1000L);
             in.amount = amount;
             in.flowType = nz(str(r.get("flow_type")));
+            in.receiptKey = firstNonBlank(str(r.get("receipt_hash")), str(r.get("order_id")));
+            in.revenueAmount = parseAmount(r.get("revenue_amount"));
+            String adFormat = nz(str(r.get("ad_format")));
+            String gameEventType = nz(str(r.get("game_event_type")));
+            in.adReward = "rewarded".equalsIgnoreCase(adFormat)
+                    || "ad_reward".equalsIgnoreCase(gameEventType)
+                    || (eventName != null && eventName.contains("ad_reward"));
             out.collect(in);
         }).returns(Types.POJO(RiskInput.class));
 
@@ -227,7 +234,80 @@ public class RiskJob {
                     }
                 }).returns(Types.POJO(RiskHit.class));
 
-        DataStream<RiskHit> allHits = thresholdHits.union(frequencyHits).union(velocityHits).union(ratioHits);
+        DataStream<RiskHit> duplicateReceiptHits = inputs
+                .filter(i -> i.receiptKey != null && !i.receiptKey.isEmpty())
+                .keyBy(i -> i.gameId + "|" + i.environment + "|" + subjectKey(i) + "|" + i.receiptKey)
+                .window(SlidingEventTimeWindows.of(Time.minutes(freqWindowMin), Time.minutes(freqWindowMin / 2 > 0 ? freqWindowMin / 2 : 1)))
+                .process(new ProcessWindowFunction<RiskInput, RiskHit, String, TimeWindow>() {
+                    @Override
+                    public void open(org.apache.flink.configuration.Configuration parameters) {
+                        RuleFetcher.startOnce(controlUrl, controlGameId, controlToken, ruleRefreshMs);
+                    }
+                    @Override
+                    public void process(String key, Context ctx, Iterable<RiskInput> events, Collector<RiskHit> out) {
+                        RuleConfig.RuleSpec spec = RuleConfig.byType("DUPLICATE_RECEIPT");
+                        long count = 0;
+                        RiskInput last = null;
+                        for (RiskInput e : events) {
+                            count++;
+                            last = e;
+                        }
+                        if (count >= spec.triggerThreshold && last != null) {
+                            Map<String, String> ev = new HashMap<>();
+                            ev.put("receipt_key", last.receiptKey);
+                            ev.put("occurrences", String.valueOf(count));
+                            ev.put("window_minutes", String.valueOf(freqWindowMin));
+                            ev.put("subject", subjectKey(last));
+                            out.collect(new RiskHit(
+                                    last.gameId, last.environment, last.ts, UUID.randomUUID().toString(), last.eventId,
+                                    spec.ruleId != null ? spec.ruleId : "risk-duplicate-receipt", "DUPLICATE_RECEIPT", spec.riskLevel,
+                                    subjectType(last), subjectId(last),
+                                    spec.riskScore, spec.actionType,
+                                    "receipt " + last.receiptKey + " submitted " + count + " times in " + freqWindowMin + "min",
+                                    ev));
+                        }
+                    }
+                }).returns(Types.POJO(RiskHit.class));
+
+        DataStream<RiskHit> adRewardHits = inputs
+                .filter(RiskJob::isAdReward)
+                .keyBy(i -> i.gameId + "|" + i.environment + "|" + subjectKey(i))
+                .window(SlidingEventTimeWindows.of(Time.minutes(freqWindowMin), Time.minutes(freqWindowMin / 2 > 0 ? freqWindowMin / 2 : 1)))
+                .process(new ProcessWindowFunction<RiskInput, RiskHit, String, TimeWindow>() {
+                    @Override
+                    public void open(org.apache.flink.configuration.Configuration parameters) {
+                        RuleFetcher.startOnce(controlUrl, controlGameId, controlToken, ruleRefreshMs);
+                    }
+                    @Override
+                    public void process(String key, Context ctx, Iterable<RiskInput> events, Collector<RiskHit> out) {
+                        RuleConfig.RuleSpec spec = RuleConfig.byType("AD_REWARD");
+                        long count = 0;
+                        BigDecimal revenueSum = BigDecimal.ZERO;
+                        RiskInput last = null;
+                        for (RiskInput e : events) {
+                            count++;
+                            if (e.revenueAmount != null) revenueSum = revenueSum.add(e.revenueAmount);
+                            last = e;
+                        }
+                        if (count > spec.triggerThreshold && last != null) {
+                            Map<String, String> ev = new HashMap<>();
+                            ev.put("ad_reward_count", String.valueOf(count));
+                            ev.put("revenue_sum", revenueSum.toPlainString());
+                            ev.put("window_minutes", String.valueOf(freqWindowMin));
+                            ev.put("subject", subjectKey(last));
+                            out.collect(new RiskHit(
+                                    last.gameId, last.environment, last.ts, UUID.randomUUID().toString(), last.eventId,
+                                    spec.ruleId != null ? spec.ruleId : "risk-ad-reward-abuse", "AD_REWARD", spec.riskLevel,
+                                    subjectType(last), subjectId(last),
+                                    spec.riskScore, spec.actionType,
+                                    "ad reward burst " + count + " in " + freqWindowMin + "min (limit " + spec.triggerThreshold + ")",
+                                    ev));
+                        }
+                    }
+                }).returns(Types.POJO(RiskHit.class));
+
+        DataStream<RiskHit> allHits = thresholdHits.union(frequencyHits).union(velocityHits).union(ratioHits)
+                .union(duplicateReceiptHits).union(adRewardHits);
 
         KafkaSink<String> kafkaSink = KafkaSink.<String>builder()
                 .setBootstrapServers(bootstrap)
@@ -287,6 +367,15 @@ public class RiskJob {
 
     static String nz(String s) { return s == null ? "" : s; }
 
+    static String firstNonBlank(String... values) {
+        for (String v : values) {
+            if (v != null && !v.isBlank()) return v;
+        }
+        return null;
+    }
+
+    static boolean isAdReward(RiskInput i) { return i.adReward; }
+
     static BigDecimal parseAmount(Object v) {
         if (v == null) return null;
         try { return new BigDecimal(v.toString()); } catch (Exception e) { return null; }
@@ -330,6 +419,11 @@ public class RiskJob {
         public Timestamp ts;
         public BigDecimal amount;
         public String flowType;
+        /** 收据键：receipt_hash 优先，退化 order_id；null 表示非收据事件 */
+        public String receiptKey;
+        public BigDecimal revenueAmount;
+        /** 是否为激励广告 reward 事件 */
+        public boolean adReward;
     }
 
     public static final class RiskHit {

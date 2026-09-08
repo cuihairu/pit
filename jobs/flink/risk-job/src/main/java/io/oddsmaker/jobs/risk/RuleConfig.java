@@ -39,6 +39,14 @@ public final class RuleConfig {
                 null, "RATIO",
                 Integer.parseInt(System.getProperty("risk.ratio.max-source-sink", "10")),
                 "ALERT", 65, "MEDIUM"));
+        defs.put("DUPLICATE_RECEIPT", new RuleSpec(
+                null, "DUPLICATE_RECEIPT",
+                Integer.parseInt(System.getProperty("risk.receipt.max-occurrences", "2")),
+                "REVIEW", 90, "CRITICAL"));
+        defs.put("AD_REWARD", new RuleSpec(
+                null, "AD_REWARD",
+                Integer.parseInt(System.getProperty("risk.adreward.max-per-window", "60")),
+                "ALERT", 70, "HIGH"));
         DEFAULTS = Collections.unmodifiableMap(defs);
     }
 

@@ -25,6 +25,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 /**
  * 风控事件消费者处置测试。
@@ -45,6 +46,8 @@ class RiskEventConsumerTest {
     @Mock private BlockListService blockListService;
     @Mock private WebhookService webhookService;
     @Mock private AuditLogService auditLogService;
+    @Mock private io.oddsmaker.control.jpa.RiskCaseRepo riskCaseRepo;
+    @Mock private ReviewQueueService reviewQueueService;
 
     private RiskEventConsumer consumer;
     private final ObjectMapper om = new ObjectMapper();
@@ -57,6 +60,8 @@ class RiskEventConsumerTest {
         ReflectionTestUtils.setField(consumer, "blockListService", blockListService);
         ReflectionTestUtils.setField(consumer, "webhookService", webhookService);
         ReflectionTestUtils.setField(consumer, "auditLogService", auditLogService);
+        ReflectionTestUtils.setField(consumer, "riskCaseRepo", riskCaseRepo);
+        ReflectionTestUtils.setField(consumer, "reviewQueueService", reviewQueueService);
     }
 
     /** 构造对齐 RiskJob.toJson 输出契约（snake_case）的风控事件 JSON */
@@ -80,7 +85,7 @@ class RiskEventConsumerTest {
     }
 
     @Test
-    @DisplayName("BLOCK + DEVICE + HIGH → 写封禁名单：封 device_id，时长 1440 分钟，非永久")
+    @DisplayName("BLOCK + DEVICE + HIGH → 写封禁名单并下发 risk_action webhook")
     void blockDeviceHigh_appliesBlock() {
         consumer.onRiskEvent(riskEventJson("BLOCK", "HIGH", "DEVICE", "dev_abc", "rr_threshold"));
 
@@ -91,7 +96,12 @@ class RiskEventConsumerTest {
             eq("fraud"), eq(BlockListEntity.BlockType.HARD),
             eq(false), eq(1440),
             eq("risk-automation"), isNull(), eq("Amount exceeds threshold"));
-        verifyNoInteractions(webhookService, auditLogService);
+        // 处置结果通过 risk_action webhook 输出到游戏服
+        org.mockito.ArgumentCaptor<java.util.Map<String, Object>> payload =
+            org.mockito.ArgumentCaptor.forClass(java.util.Map.class);
+        verify(webhookService).sendCustomWebhook(eq("game_demo"), eq("risk_action"), payload.capture());
+        assertEquals("block", payload.getValue().get("action"));
+        assertEquals("blocked", payload.getValue().get("state"));
     }
 
     @Test
@@ -149,6 +159,71 @@ class RiskEventConsumerTest {
     void invalidJson_skipsGracefully() {
         assertDoesNotThrow(() -> consumer.onRiskEvent("{not a valid json"));
         verifyNoInteractions(blockListService, webhookService, auditLogService);
+    }
+
+    @Test
+    @DisplayName("REVIEW → 创建风控案件进入审核队列，并通知游戏服")
+    void review_createsCaseAndQueues() {
+        when(riskCaseRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        consumer.onRiskEvent(riskEventJson("REVIEW", "CRITICAL", "PLAYER", "user_7", "rr_receipt"));
+
+        org.mockito.ArgumentCaptor<io.oddsmaker.control.jpa.RiskCaseEntity> caseCaptor =
+            org.mockito.ArgumentCaptor.forClass(io.oddsmaker.control.jpa.RiskCaseEntity.class);
+        verify(riskCaseRepo).save(caseCaptor.capture());
+        io.oddsmaker.control.jpa.RiskCaseEntity riskCase = caseCaptor.getValue();
+        assertEquals("player_id", riskCase.targetType);
+        assertEquals("user_7", riskCase.targetId);
+        assertEquals(io.oddsmaker.control.jpa.RiskCaseEntity.RiskLevel.CRITICAL, riskCase.riskLevel);
+        assertEquals(io.oddsmaker.control.jpa.RiskCaseEntity.ActionType.REVIEW, riskCase.actionTaken);
+
+        // CRITICAL → 优先级 1
+        verify(reviewQueueService).addToQueue(org.mockito.ArgumentMatchers.same(riskCase), eq(1), eq("risk_automation"), eq("fraud"));
+        verify(auditLogService).log(
+            eq(AuditLogEntity.AuditAction.SECURITY_ALERT), any(), any(),
+            any(), any(), any(), any(), any(), any(), any(), any(), any());
+
+        org.mockito.ArgumentCaptor<java.util.Map<String, Object>> payload =
+            org.mockito.ArgumentCaptor.forClass(java.util.Map.class);
+        verify(webhookService).sendCustomWebhook(eq("game_demo"), eq("risk_action"), payload.capture());
+        assertEquals("review", payload.getValue().get("action"));
+        assertEquals("queued", payload.getValue().get("state"));
+    }
+
+    @Test
+    @DisplayName("THROTTLE → 审计并下发限流指令到游戏服，不封禁不建案")
+    void throttle_notifiesGameServer() {
+        consumer.onRiskEvent(riskEventJson("THROTTLE", "MEDIUM", "DEVICE", "dev_th", "rr_freq"));
+
+        verify(blockListService, never()).addBlock(
+            any(), any(), any(), any(), any(), any(), any(), anyBoolean(),
+            any(), any(), any(), any());
+        verifyNoInteractions(riskCaseRepo, reviewQueueService);
+
+        org.mockito.ArgumentCaptor<java.util.Map<String, Object>> payload =
+            org.mockito.ArgumentCaptor.forClass(java.util.Map.class);
+        verify(webhookService).sendCustomWebhook(eq("game_demo"), eq("risk_action"), payload.capture());
+        assertEquals("throttle", payload.getValue().get("action"));
+        verify(auditLogService).log(
+            eq(AuditLogEntity.AuditAction.SECURITY_ALERT), any(), any(),
+            any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("MARK → 审计并下发打标指令到游戏服")
+    void mark_notifiesGameServer() {
+        consumer.onRiskEvent(riskEventJson("MARK", "LOW", "PLAYER", "user_mk", "rr_model"));
+
+        verifyNoInteractions(blockListService, riskCaseRepo, reviewQueueService);
+
+        org.mockito.ArgumentCaptor<java.util.Map<String, Object>> payload =
+            org.mockito.ArgumentCaptor.forClass(java.util.Map.class);
+        verify(webhookService).sendCustomWebhook(eq("game_demo"), eq("risk_action"), payload.capture());
+        assertEquals("mark", payload.getValue().get("action"));
+        assertEquals("marked", payload.getValue().get("state"));
+        verify(auditLogService).log(
+            eq(AuditLogEntity.AuditAction.SECURITY_ALERT), any(), any(),
+            any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
