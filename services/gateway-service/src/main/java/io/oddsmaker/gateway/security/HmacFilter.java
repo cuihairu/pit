@@ -21,9 +21,11 @@ import java.time.Instant;
 @Component
 public class HmacFilter implements WebFilter {
     private final AuthService authService;
+    private final ReplayGuard replayGuard;
 
-    public HmacFilter(AuthService authService) {
+    public HmacFilter(AuthService authService, ReplayGuard replayGuard) {
         this.authService = authService;
+        this.replayGuard = replayGuard;
     }
 
     @Override
@@ -84,6 +86,11 @@ public class HmacFilter implements WebFilter {
             String computed = HmacSigner.hmacSha256Hex(finalSecret, finalT + "." + new String(bodyBytes, StandardCharsets.UTF_8));
             if (!computed.equalsIgnoreCase(finalS)) {
                 return unauthorized(exchange, "invalid_signature");
+            }
+
+            // 风控前置：同一签名在时间窗内只允许使用一次（防重放）
+            if (!replayGuard.consumeSignature(finalS)) {
+                return unauthorized(exchange, "replay_detected");
             }
 
             DataBufferFactory bufferFactory = exchange.getResponse().bufferFactory();

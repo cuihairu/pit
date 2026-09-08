@@ -47,6 +47,7 @@ public class BatchController {
     private final PolicyService policyService;
     private final PiiPolicy piiPolicy;
     private final BlockListClient blockListClient;
+    private final io.oddsmaker.gateway.security.ReplayGuard replayGuard;
 
     public BatchController(
             ObjectMapper om,
@@ -56,7 +57,8 @@ public class BatchController {
             JsonSchemaValidator schemaValidator,
             PolicyService policyService,
             PiiPolicy piiPolicy,
-            BlockListClient blockListClient
+            BlockListClient blockListClient,
+            io.oddsmaker.gateway.security.ReplayGuard replayGuard
     ) {
         this.om = om;
         this.publisher = publisher;
@@ -66,12 +68,14 @@ public class BatchController {
         this.policyService = policyService;
         this.piiPolicy = piiPolicy;
         this.blockListClient = blockListClient;
+        this.replayGuard = replayGuard;
     }
 
     public static class BatchResponse {
         public List<String> accepted = new CopyOnWriteArrayList<>();
         public List<Map<String, String>> rejected = new CopyOnWriteArrayList<>();
         public int sampled_out = 0;
+        public int duplicates = 0;
         public int next_hint_ms = 3000;
     }
 
@@ -121,6 +125,11 @@ public class BatchController {
                 if (event.eventType == null || event.eventType.isBlank()) {
                     event.eventType = inferEventType(event.eventName);
                 }
+                // 风控前置：事件时间戳信差检查（默认 ±24h，可配 oddsmaker.risk.max-event-ts-drift-ms）
+                if (!replayGuard.isTimestampPlausible(event.tsClient, System.currentTimeMillis())) {
+                    reject(resp, event, "invalid_timestamp");
+                    continue;
+                }
                 if (event.tsServer == null) {
                     event.tsServer = Instant.now().toEpochMilli();
                 }
@@ -152,6 +161,13 @@ public class BatchController {
                 String schemaError = schemaValidator.validate(event);
                 if (schemaError != null) {
                     reject(resp, event, "invalid_schema");
+                    continue;
+                }
+                // 风控前置：event_id 幂等吸收——schema 合法后才占用幂等位，
+                // SDK 重试导致的重复事件静默去重（计入 duplicates，不重复发布、不进 DLQ）
+                if (!replayGuard.consumeEventId(event.eventId)) {
+                    resp.duplicates++;
+                    resp.accepted.add(event.eventId);
                     continue;
                 }
                 validEvents.add(event);

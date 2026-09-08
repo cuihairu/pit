@@ -1,0 +1,44 @@
+# 测试环境配置：完整继承主配置的本地静态 key，并放宽风控时间窗以兼容历史固定时间戳用例
+server:
+  port: 0
+
+oddsmaker:
+  kafka:
+    bootstrap: localhost:9092
+    topic: oddsmaker.events_raw
+    dlq-topic: oddsmaker.deadletter
+  auth:
+    keys:
+      pk_test_example: sk_test_secret
+      pk_test_rl: sk_test_secret
+      pk_test_pii: sk_test_secret
+      pk_iprl: sk_test_secret
+      pk_deny: sk_test_secret
+      pk_mask: sk_test_secret
+      pk_ipv6: sk_test_secret
+      pk_clamp: sk_test_secret
+  ratelimit:
+    rpm: 600
+    ip-rpm: 300
+  control:
+    url: http://localhost:8085
+    internal-token: ""
+  blocklist:
+    enabled: true
+    internal-token: ""
+    timeout-ms: 200
+    cache-ttl-seconds: 15
+  props:
+    allowlist: []
+  event:
+    max-bytes: 65536
+  request:
+    max-bytes: 1048576
+  pii:
+    email: mask
+    phone: mask
+    ip: coarse
+    deny-keys: [password, pass, passwd, credit_card, ssn]
+    mask-keys: [email, phone, mobile]
+  risk:
+    max-event-ts-drift-ms: 315360000000  # ~10 年

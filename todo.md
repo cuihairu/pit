@@ -23,7 +23,7 @@
 ## P2 风控基础
 
 - [x] RiskRule API：阈值、黑名单、速度、序列、模型规则
-- [ ] Gateway 风控前置：黑名单、重放、时间窗、非法环境、body size
+- [x] Gateway 风控前置：黑名单、重放、时间窗、非法环境、body size
 - [ ] Flink risk job：高频事件、重复收据、资源异常、广告 reward 异常
 - [ ] ClickHouse 表：`risk_events`、`risk_scores`、`risk_actions`
 - [ ] 风控 Webhook：输出 block/review/mark/throttle 到游戏服
