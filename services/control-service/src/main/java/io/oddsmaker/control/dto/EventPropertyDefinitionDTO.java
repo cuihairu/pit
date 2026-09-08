@@ -29,6 +29,7 @@ public class EventPropertyDefinitionDTO {
     public Boolean required;
     public String defaultValue;
     public String allowedValues;
+    public Integer cardinalityLimit;
     public Double minValue;
     public Double maxValue;
     public Integer minLength;
@@ -56,6 +57,7 @@ public class EventPropertyDefinitionDTO {
         this.required = entity.required;
         this.defaultValue = entity.defaultValue;
         this.allowedValues = entity.allowedValues;
+        this.cardinalityLimit = entity.cardinalityLimit;
         this.minValue = entity.minValue;
         this.maxValue = entity.maxValue;
         this.minLength = entity.minLength;
@@ -83,6 +85,7 @@ public class EventPropertyDefinitionDTO {
         entity.required = this.required != null ? this.required : false;
         entity.defaultValue = this.defaultValue;
         entity.allowedValues = this.allowedValues;
+        entity.cardinalityLimit = this.cardinalityLimit;
         entity.minValue = this.minValue;
         entity.maxValue = this.maxValue;
         entity.minLength = this.minLength;
@@ -105,6 +108,7 @@ public class EventPropertyDefinitionDTO {
         if (this.required != null) entity.required = this.required;
         if (this.defaultValue != null) entity.defaultValue = this.defaultValue;
         if (this.allowedValues != null) entity.allowedValues = this.allowedValues;
+        if (this.cardinalityLimit != null) entity.cardinalityLimit = this.cardinalityLimit;
         if (this.minValue != null) entity.minValue = this.minValue;
         if (this.maxValue != null) entity.maxValue = this.maxValue;
         if (this.minLength != null) entity.minLength = this.minLength;
@@ -129,6 +133,7 @@ public class EventPropertyDefinitionDTO {
     public boolean hasValidation() {
         return minValue != null || maxValue != null ||
                minLength != null || maxLength != null ||
-               regexPattern != null || allowedValues != null;
+               regexPattern != null || allowedValues != null ||
+               cardinalityLimit != null;
     }
 }

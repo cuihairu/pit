@@ -48,6 +48,13 @@ public class EventPropertyDefinitionEntity {
     @Column(name = "allowed_values", columnDefinition = "TEXT")
     public String allowedValues;      // 允许的值列表（JSON数组）
 
+    /**
+     * 属性基数上限：约束该属性可出现的不同取值数量，防止高基数字段打爆存储。
+     * null 表示不限制；对枚举类型属性必须不小于 allowedValues 数量。
+     */
+    @Column(name = "cardinality_limit")
+    public Integer cardinalityLimit;
+
     // 验证规则
     @Column(name = "min_value")
     public Double minValue;          // 最小值（数值类型）
@@ -137,7 +144,8 @@ public class EventPropertyDefinitionEntity {
     public boolean hasValidation() {
         return minValue != null || maxValue != null ||
                minLength != null || maxLength != null ||
-               regexPattern != null || allowedValues != null;
+               regexPattern != null || allowedValues != null ||
+               cardinalityLimit != null;
     }
 
     public String getValidationDescription() {

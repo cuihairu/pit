@@ -185,4 +185,28 @@ public class TrackingPlanController {
         List<EventPropertyDefinitionDTO> properties = trackingPlanService.listPropertyDefinitions(eventDefinitionId);
         return ResponseEntity.ok(ApiResponse.success(properties));
     }
+
+    @PutMapping("/{trackingPlanId}/events/{eventDefinitionId}/properties/{propertyDefinitionId}")
+    @Operation(summary = "Update property definition", description = "Update a property definition (draft plans only)")
+    public ResponseEntity<ApiResponse<EventPropertyDefinitionDTO>> updatePropertyDefinition(
+            @PathVariable String gameId,
+            @PathVariable String trackingPlanId,
+            @PathVariable String eventDefinitionId,
+            @PathVariable String propertyDefinitionId,
+            @RequestBody EventPropertyDefinitionDTO dto) {
+        EventPropertyDefinitionDTO result = trackingPlanService.updatePropertyDefinition(
+            eventDefinitionId, propertyDefinitionId, dto);
+        return ResponseEntity.ok(ApiResponse.success(result));
+    }
+
+    @DeleteMapping("/{trackingPlanId}/events/{eventDefinitionId}/properties/{propertyDefinitionId}")
+    @Operation(summary = "Delete property definition", description = "Delete a property definition (draft plans only)")
+    public ResponseEntity<ApiResponse<Void>> deletePropertyDefinition(
+            @PathVariable String gameId,
+            @PathVariable String trackingPlanId,
+            @PathVariable String eventDefinitionId,
+            @PathVariable String propertyDefinitionId) {
+        trackingPlanService.deletePropertyDefinition(eventDefinitionId, propertyDefinitionId);
+        return ResponseEntity.ok(ApiResponse.success(null));
+    }
 }

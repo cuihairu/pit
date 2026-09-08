@@ -40,6 +40,11 @@ public class TrackingPlanService {
     @Autowired
     private GameEnvironmentRepo environmentRepo;
 
+    @Autowired
+    private AuditLogService auditLog;
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+
     /**
      * 创建追踪计划
      */
@@ -322,11 +327,113 @@ public class TrackingPlanService {
         entity.eventDefinitionId = eventDefinitionId;
         entity.createdAt = LocalDateTime.now();
         entity.updatedAt = LocalDateTime.now();
+        validatePropertyDefinition(entity);
 
         entity = propertyDefinitionRepo.save(entity);
 
+        auditLog.logCreate("event_property", entity.id, entity.propertyName, "api", "api", null,
+            java.util.Map.of("gameId", trackingPlan.gameId, "eventId", eventDefinitionId,
+                "type", String.valueOf(entity.type),
+                "cardinalityLimit", String.valueOf(entity.cardinalityLimit)));
         logger.info("Property definition created: {}", entity.id);
         return new EventPropertyDefinitionDTO(entity);
+    }
+
+    /**
+     * 更新属性定义（仅草稿计划可编辑）
+     */
+    public EventPropertyDefinitionDTO updatePropertyDefinition(String eventDefinitionId, String propertyDefinitionId, EventPropertyDefinitionDTO dto) {
+        logger.info("Updating property definition: {}", propertyDefinitionId);
+
+        EventDefinitionEntity eventDef = requireEventDefinition(eventDefinitionId);
+        TrackingPlanEntity trackingPlan = requireTrackingPlan(eventDef.trackingPlanId);
+        if (!trackingPlan.canEdit()) {
+            throw new IllegalStateException("Property definitions can only be updated in draft tracking plans");
+        }
+
+        EventPropertyDefinitionEntity entity = propertyDefinitionRepo.findById(propertyDefinitionId)
+            .filter(p -> p.deletedAt == null && eventDefinitionId.equals(p.eventDefinitionId))
+            .orElseThrow(() -> new IllegalArgumentException("Property definition not found: " + propertyDefinitionId));
+
+        dto.updateEntity(entity);
+        entity.updatedAt = LocalDateTime.now();
+        validatePropertyDefinition(entity);
+
+        entity = propertyDefinitionRepo.save(entity);
+
+        auditLog.logUpdate("event_property", entity.id, entity.propertyName, "api", "api", null,
+            java.util.Map.of("gameId", trackingPlan.gameId, "eventId", eventDefinitionId,
+                "type", String.valueOf(entity.type),
+                "cardinalityLimit", String.valueOf(entity.cardinalityLimit)));
+        return new EventPropertyDefinitionDTO(entity);
+    }
+
+    /**
+     * 删除属性定义（仅草稿计划可编辑，软删除）
+     */
+    public void deletePropertyDefinition(String eventDefinitionId, String propertyDefinitionId) {
+        logger.info("Deleting property definition: {}", propertyDefinitionId);
+
+        EventDefinitionEntity eventDef = requireEventDefinition(eventDefinitionId);
+        TrackingPlanEntity trackingPlan = requireTrackingPlan(eventDef.trackingPlanId);
+        if (!trackingPlan.canEdit()) {
+            throw new IllegalStateException("Property definitions can only be deleted from draft tracking plans");
+        }
+
+        EventPropertyDefinitionEntity entity = propertyDefinitionRepo.findById(propertyDefinitionId)
+            .filter(p -> p.deletedAt == null && eventDefinitionId.equals(p.eventDefinitionId))
+            .orElseThrow(() -> new IllegalArgumentException("Property definition not found: " + propertyDefinitionId));
+
+        entity.deletedAt = LocalDateTime.now();
+        propertyDefinitionRepo.save(entity);
+        auditLog.logDelete("event_property", entity.id, entity.propertyName, "api", "api", null);
+    }
+
+    /**
+     * 字段字典规格校验：
+     * - 枚举类型必须提供合法的 allowedValues（非空 JSON 数组、无重复）
+     * - 枚举的 cardinalityLimit 不允许小于候选值数量
+     * - 数组类型必须声明元素类型
+     * - cardinalityLimit 必须为正
+     */
+    private void validatePropertyDefinition(EventPropertyDefinitionEntity entity) {
+        if (entity.cardinalityLimit != null && entity.cardinalityLimit <= 0) {
+            throw new IllegalArgumentException("cardinalityLimit must be positive: " + entity.cardinalityLimit);
+        }
+        if (entity.type == EventPropertyDefinitionEntity.PropertyType.ARRAY
+                && (entity.arrayElementType == null || entity.arrayElementType.isBlank())) {
+            throw new IllegalArgumentException("arrayElementType is required for ARRAY property: " + entity.propertyName);
+        }
+        if (entity.type == EventPropertyDefinitionEntity.PropertyType.ENUM) {
+            List<String> values = parseAllowedValues(entity.allowedValues);
+            if (values.isEmpty()) {
+                throw new IllegalArgumentException(
+                    "ENUM property requires non-empty allowedValues JSON array: " + entity.propertyName);
+            }
+            if (entity.cardinalityLimit != null && entity.cardinalityLimit < values.size()) {
+                throw new IllegalArgumentException(String.format(
+                    "cardinalityLimit (%d) cannot be smaller than allowedValues size (%d) for ENUM property: %s",
+                    entity.cardinalityLimit, values.size(), entity.propertyName));
+            }
+        }
+    }
+
+    private List<String> parseAllowedValues(String allowedValues) {
+        if (allowedValues == null || allowedValues.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<?> raw = JSON.readValue(allowedValues, List.class);
+            List<String> values = raw.stream().map(String::valueOf).toList();
+            if (values.size() != values.stream().distinct().count()) {
+                throw new IllegalArgumentException("allowedValues contains duplicates: " + allowedValues);
+            }
+            return values;
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException("allowedValues must be a JSON array of strings: " + allowedValues, e);
+        }
     }
 
     /**
