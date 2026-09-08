@@ -1,10 +1,10 @@
 package io.oddsmaker.control.api;
 
 import io.oddsmaker.control.jpa.RiskRuleEntity;
+import io.oddsmaker.control.security.AccessGuard;
 import io.oddsmaker.control.service.RiskRuleService;
 import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
@@ -18,13 +18,14 @@ import java.util.Map;
 public class RiskRuleController {
 
     private final RiskRuleService riskRuleService;
+    private final AccessGuard accessGuard;
 
-    public RiskRuleController(RiskRuleService riskRuleService) {
+    public RiskRuleController(RiskRuleService riskRuleService, AccessGuard accessGuard) {
         this.riskRuleService = riskRuleService;
+        this.accessGuard = accessGuard;
     }
 
     @GetMapping
-    @PreAuthorize("hasAuthority('READ_GAME:' + #gameId)")
     public ResponseEntity<Map<String, Object>> list(
             @RequestParam(value = "gameId", required = false) String gameId,
             @RequestParam(value = "environmentId", required = false) String environmentId,
@@ -33,6 +34,9 @@ public class RiskRuleController {
             @RequestParam(value = "q", required = false) String q,
             @RequestParam(value = "page", required = false, defaultValue = "0") int page,
             @RequestParam(value = "size", required = false, defaultValue = "50") int size) {
+        if (gameId != null && !gameId.isBlank()) {
+            accessGuard.requireGamePermission(gameId, "risk_rule:read");
+        }
         Page<RiskRuleEntity> result = riskRuleService.list(gameId, environmentId, status, type, q, page, size);
         return ResponseEntity.ok(Map.of(
             "content", result.getContent().stream().map(RiskRuleController::toResp).toList(),
@@ -44,38 +48,62 @@ public class RiskRuleController {
     @GetMapping("/{id}")
     public ResponseEntity<RiskRuleResp> get(@PathVariable String id) {
         RiskRuleEntity rule = riskRuleService.get(id);
-        return rule == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(toResp(rule));
+        if (rule == null) {
+            return ResponseEntity.notFound().build();
+        }
+        accessGuard.requireGamePermission(rule.gameId, "risk_rule:read");
+        return ResponseEntity.ok(toResp(rule));
     }
 
     @PostMapping
-    @PreAuthorize("hasAuthority('MANAGE_RISK:' + #rule.gameId)")
     public ResponseEntity<RiskRuleResp> create(@RequestBody RiskRuleEntity rule) {
+        if (rule.gameId == null || rule.gameId.isBlank()) {
+            throw new IllegalArgumentException("gameId is required");
+        }
+        accessGuard.requireGamePermission(rule.gameId, "risk_rule:create");
         return ResponseEntity.ok(toResp(riskRuleService.create(rule, "api")));
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAuthority('MANAGE_RISK:' + #gameId)")
     public ResponseEntity<RiskRuleResp> update(@PathVariable String id,
-                                               @RequestParam(value = "gameId", required = false) String gameId,
                                                @RequestBody RiskRuleEntity req) {
+        RiskRuleEntity existing = riskRuleService.get(id);
+        if (existing == null) {
+            return ResponseEntity.notFound().build();
+        }
+        String gameId = req.gameId != null && !req.gameId.isBlank() ? req.gameId : existing.gameId;
+        accessGuard.requireGamePermission(gameId, "risk_rule:update");
         RiskRuleEntity updated = riskRuleService.update(id, req, "api");
         return updated == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(toResp(updated));
     }
 
     @PostMapping("/{id}/enable")
     public ResponseEntity<RiskRuleResp> enable(@PathVariable String id) {
-        RiskRuleEntity updated = riskRuleService.setStatus(id, true, "api");
-        return updated == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(toResp(updated));
+        return toggle(id, true);
     }
 
     @PostMapping("/{id}/disable")
     public ResponseEntity<RiskRuleResp> disable(@PathVariable String id) {
-        RiskRuleEntity updated = riskRuleService.setStatus(id, false, "api");
+        return toggle(id, false);
+    }
+
+    private ResponseEntity<RiskRuleResp> toggle(String id, boolean enable) {
+        RiskRuleEntity existing = riskRuleService.get(id);
+        if (existing == null) {
+            return ResponseEntity.notFound().build();
+        }
+        accessGuard.requireGamePermission(existing.gameId, "risk_rule:update");
+        RiskRuleEntity updated = riskRuleService.setStatus(id, enable, "api");
         return updated == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(toResp(updated));
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable String id) {
+        RiskRuleEntity existing = riskRuleService.get(id);
+        if (existing == null) {
+            return ResponseEntity.notFound().build();
+        }
+        accessGuard.requireGamePermission(existing.gameId, "risk_rule:delete");
         return riskRuleService.delete(id, "api")
             ? ResponseEntity.noContent().build()
             : ResponseEntity.notFound().build();

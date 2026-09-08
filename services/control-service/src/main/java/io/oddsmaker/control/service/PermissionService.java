@@ -395,15 +395,48 @@ public class PermissionService {
     }
 
     /**
-     * 撤销用户的角色
+     * 撤销用户的角色（scope 化：精确匹配 gameId/environment，null 表示该维度不限）
      */
-    public void revokeRole(String userId, String roleId) {
-        logger.info("Revoking role {} from user {}", roleId, userId);
+    public void revokeRole(String userId, String roleId, String gameId, String environment) {
+        logger.info("Revoking role {} from user {} (gameId={}, environment={})",
+            roleId, userId, gameId, environment);
 
-        Optional<UserRoleEntity> userRole = userRoleRepo.findByUserIdAndRoleId(userId, roleId);
-        if (userRole.isPresent()) {
-            userRoleRepo.delete(userRole.get());
+        List<UserRoleEntity> assignments = userRoleRepo.findByUserId(userId).stream()
+            .filter(ur -> roleId.equals(ur.roleId))
+            .filter(ur -> Objects.equals(ur.gameId, gameId))
+            .filter(ur -> Objects.equals(ur.environment, environment))
+            .toList();
+        if (assignments.isEmpty()) {
+            throw new IllegalArgumentException(
+                "Role assignment not found: user=" + userId + ", role=" + roleId
+                    + ", gameId=" + gameId + ", environment=" + environment);
         }
+        userRoleRepo.deleteAll(assignments);
+    }
+
+    /**
+     * 列出用户的全部角色分配（含 scope 与生效状态）
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> listAssignments(String userId) {
+        if (!userRepo.existsById(userId)) {
+            throw new IllegalArgumentException("User not found: " + userId);
+        }
+        return userRoleRepo.findByUserId(userId).stream()
+            .map(ur -> {
+                RoleEntity role = roleRepo.findById(ur.roleId).orElse(null);
+                Map<String, Object> out = new LinkedHashMap<>();
+                out.put("roleId", ur.roleId);
+                out.put("roleName", role != null ? role.name : ur.roleId);
+                out.put("scope", ur.isGlobal() ? "global" : ur.isEnvironmentScoped() ? "environment" : "game");
+                out.put("gameId", ur.gameId);
+                out.put("environment", ur.environment);
+                out.put("assignedBy", ur.assignedBy);
+                out.put("assignedAt", ur.assignedAt);
+                out.put("valid", ur.isValid());
+                return out;
+            })
+            .collect(Collectors.toList());
     }
 
     /**
@@ -568,13 +601,76 @@ public class PermissionService {
         roleRepo.save(developer);
 
         // 查看者角色
-        RoleEntity viewer = createRoleIfNotExists("viewer", "Viewer", 
+        RoleEntity viewer = createRoleIfNotExists("viewer", "Viewer",
             RoleEntity.RoleType.SYSTEM, 50);
         if (viewer.permissions == null) {
             viewer.permissions = new HashSet<>();
         }
         viewer.permissions.addAll(permissionRepo.findByAction(PermissionEntity.PermissionAction.READ));
         roleRepo.save(viewer);
+
+        createBusinessRoles();
+    }
+
+    /**
+     * P1 单公司多游戏业务角色（global/game/environment 三级 scope 均可分配）：
+     * owner / operator / analyst / developer / risk_admin / viewer
+     */
+    private void createBusinessRoles() {
+        List<PermissionEntity> all = permissionRepo.findAll();
+        Set<PermissionEntity> allReads = new HashSet<>(permissionRepo.findByAction(PermissionEntity.PermissionAction.READ));
+
+        // owner：公司所有者，全部权限（含用户与系统管理）
+        RoleEntity owner = createRoleIfNotExists("owner", "Company Owner",
+            RoleEntity.RoleType.SYSTEM, 95);
+        if (owner.permissions == null) owner.permissions = new HashSet<>();
+        owner.permissions.addAll(all);
+        roleRepo.save(owner);
+
+        // operator：运营，管理游戏配置/环境/密钥/实验，不碰用户与系统
+        RoleEntity operator = createRoleIfNotExists("operator", "Game Operator",
+            RoleEntity.RoleType.SYSTEM, 85);
+        if (operator.permissions == null) operator.permissions = new HashSet<>();
+        operator.permissions.addAll(resources(all, "game:read", "game:update",
+            "environment:create", "environment:read", "environment:update", "environment:delete",
+            "api_key:create", "api_key:read", "api_key:update", "api_key:delete",
+            "experiment:create", "experiment:read", "experiment:update", "experiment:delete"));
+        roleRepo.save(operator);
+
+        // analyst：分析师，读全部 + 实验管理
+        RoleEntity analyst = createRoleIfNotExists("analyst", "Data Analyst",
+            RoleEntity.RoleType.SYSTEM, 75);
+        if (analyst.permissions == null) analyst.permissions = new HashSet<>();
+        analyst.permissions.addAll(allReads);
+        analyst.permissions.addAll(resources(all, "experiment:create", "experiment:update", "experiment:delete"));
+        roleRepo.save(analyst);
+
+        // risk_admin：风控管理员，读全部 + 风控规则全权
+        RoleEntity riskAdmin = createRoleIfNotExists("risk_admin", "Risk Admin",
+            RoleEntity.RoleType.SYSTEM, 72);
+        if (riskAdmin.permissions == null) riskAdmin.permissions = new HashSet<>();
+        riskAdmin.permissions.addAll(allReads);
+        riskAdmin.permissions.addAll(resources(all,
+            "risk_rule:create", "risk_rule:update", "risk_rule:delete"));
+        roleRepo.save(riskAdmin);
+
+        // developer：开发者，读全部 + 密钥/实验/环境管理（调试接入向）
+        RoleEntity developer = createRoleIfNotExists("developer", "Developer",
+            RoleEntity.RoleType.SYSTEM, 65);
+        if (developer.permissions == null) developer.permissions = new HashSet<>();
+        developer.permissions.addAll(allReads);
+        developer.permissions.addAll(resources(all,
+            "api_key:create", "api_key:update", "api_key:delete",
+            "experiment:create", "experiment:update", "experiment:delete",
+            "environment:create", "environment:update"));
+        roleRepo.save(developer);
+
+        // viewer：只读（复用 createDefaultRoles 中的 viewer，READ 全部）
+    }
+
+    private Set<PermissionEntity> resources(List<PermissionEntity> all, String... permissionIds) {
+        Set<String> ids = new HashSet<>(List.of(permissionIds));
+        return all.stream().filter(p -> ids.contains(p.id)).collect(Collectors.toSet());
     }
 
     /**

@@ -2,10 +2,10 @@ package io.oddsmaker.control.api;
 
 import io.oddsmaker.control.jpa.ReportEntity;
 import io.oddsmaker.control.jpa.ReportExecutionEntity;
+import io.oddsmaker.control.security.AccessGuard;
 import io.oddsmaker.control.service.ReportService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -22,12 +22,15 @@ public class ReportController {
     @Autowired
     private ReportService reportService;
 
+    @Autowired
+    private AccessGuard accessGuard;
+
     /**
      * 创建报表
      */
     @PostMapping
-    @PreAuthorize("hasAuthority('ANALYZE_DATA:' + #request.gameId)")
     public ResponseEntity<ReportEntity> createReport(@RequestBody ReportRequest request) {
+        accessGuard.requireGamePermission(request.gameId, "game:read");
         ReportEntity report = reportService.createReport(
             request.gameId,
             request.environmentId,
@@ -48,10 +51,10 @@ public class ReportController {
      * 获取报表详情
      */
     @GetMapping("/{reportId}")
-    @PreAuthorize("hasAuthority('READ_GAME:' + #gameId)")
     public ResponseEntity<ReportEntity> getReport(
             @PathVariable String reportId,
             @RequestParam String gameId) {
+        accessGuard.requireGamePermission(gameId, "game:read");
         ReportEntity report = reportService.getReport(reportId);
         return ResponseEntity.ok(report);
     }
@@ -60,8 +63,8 @@ public class ReportController {
      * 获取游戏的报表列表
      */
     @GetMapping("/game/{gameId}")
-    @PreAuthorize("hasAuthority('READ_GAME:' + #gameId)")
     public ResponseEntity<List<ReportEntity>> getGameReports(@PathVariable String gameId) {
+        accessGuard.requireGamePermission(gameId, "game:read");
         List<ReportEntity> reports = reportService.getGameReports(gameId);
         return ResponseEntity.ok(reports);
     }
@@ -70,8 +73,8 @@ public class ReportController {
      * 获取已发布的报表
      */
     @GetMapping("/published/{gameId}")
-    @PreAuthorize("hasAuthority('READ_GAME:' + #gameId)")
     public ResponseEntity<List<ReportEntity>> getPublishedReports(@PathVariable String gameId) {
+        accessGuard.requireGamePermission(gameId, "game:read");
         List<ReportEntity> reports = reportService.getPublishedReports(gameId);
         return ResponseEntity.ok(reports);
     }
@@ -80,11 +83,11 @@ public class ReportController {
      * 发布报表
      */
     @PostMapping("/{reportId}/publish")
-    @PreAuthorize("hasAuthority('MANAGE_GAME:' + #gameId)")
     public ResponseEntity<ReportEntity> publishReport(
             @PathVariable String reportId,
             @RequestParam String gameId,
             @RequestBody PublishRequest request) {
+        accessGuard.requireGamePermission(gameId, "game:update");
         ReportEntity report = reportService.publishReport(reportId, request.publishedBy);
         return ResponseEntity.ok(report);
     }
@@ -93,11 +96,11 @@ public class ReportController {
      * 执行报表
      */
     @PostMapping("/{reportId}/execute")
-    @PreAuthorize("hasAuthority('ANALYZE_DATA:' + #gameId)")
     public ResponseEntity<ReportExecutionEntity> executeReport(
             @PathVariable String reportId,
             @RequestParam String gameId,
             @RequestBody ExecuteRequest request) {
+        accessGuard.requireGamePermission(gameId, "game:read");
         ReportExecutionEntity execution = reportService.executeReport(
             reportId,
             request.triggeredBy,
@@ -112,10 +115,10 @@ public class ReportController {
      * 获取报表执行历史
      */
     @GetMapping("/{reportId}/executions")
-    @PreAuthorize("hasAuthority('READ_GAME:' + #gameId)")
     public ResponseEntity<List<ReportExecutionEntity>> getReportExecutions(
             @PathVariable String reportId,
             @RequestParam String gameId) {
+        accessGuard.requireGamePermission(gameId, "game:read");
         List<ReportExecutionEntity> executions = reportService.getReportExecutions(reportId);
         return ResponseEntity.ok(executions);
     }
@@ -124,10 +127,10 @@ public class ReportController {
      * 获取报表统计
      */
     @GetMapping("/{reportId}/stats")
-    @PreAuthorize("hasAuthority('READ_GAME:' + #gameId)")
     public ResponseEntity<Map<String, Object>> getReportStats(
             @PathVariable String reportId,
             @RequestParam String gameId) {
+        accessGuard.requireGamePermission(gameId, "game:read");
         Map<String, Object> stats = reportService.getReportStats(reportId);
         return ResponseEntity.ok(stats);
     }
@@ -136,8 +139,8 @@ public class ReportController {
      * 获取游戏的报表概览
      */
     @GetMapping("/overview/{gameId}")
-    @PreAuthorize("hasAuthority('READ_GAME:' + #gameId)")
     public ResponseEntity<Map<String, Object>> getGameReportOverview(@PathVariable String gameId) {
+        accessGuard.requireGamePermission(gameId, "game:read");
         Map<String, Object> overview = reportService.getGameReportOverview(gameId);
         return ResponseEntity.ok(overview);
     }
@@ -146,10 +149,10 @@ public class ReportController {
      * 搜索报表
      */
     @GetMapping("/search/{gameId}")
-    @PreAuthorize("hasAuthority('READ_GAME:' + #gameId)")
     public ResponseEntity<List<ReportEntity>> searchReports(
             @PathVariable String gameId,
             @RequestParam String query) {
+        accessGuard.requireGamePermission(gameId, "game:read");
         List<ReportEntity> reports = reportService.searchReports(gameId, query);
         return ResponseEntity.ok(reports);
     }
@@ -158,8 +161,8 @@ public class ReportController {
      * 获取热门报表
      */
     @GetMapping("/popular/{gameId}")
-    @PreAuthorize("hasAuthority('READ_GAME:' + #gameId)")
     public ResponseEntity<List<ReportEntity>> getPopularReports(@PathVariable String gameId) {
+        accessGuard.requireGamePermission(gameId, "game:read");
         List<ReportEntity> reports = reportService.getPopularReports(gameId);
         return ResponseEntity.ok(reports);
     }
@@ -168,8 +171,8 @@ public class ReportController {
      * 获取最近运行的报表
      */
     @GetMapping("/recent/{gameId}")
-    @PreAuthorize("hasAuthority('READ_GAME:' + #gameId)")
     public ResponseEntity<List<ReportEntity>> getRecentlyRunReports(@PathVariable String gameId) {
+        accessGuard.requireGamePermission(gameId, "game:read");
         List<ReportEntity> reports = reportService.getRecentlyRunReports(gameId);
         return ResponseEntity.ok(reports);
     }

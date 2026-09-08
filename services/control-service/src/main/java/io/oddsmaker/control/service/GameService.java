@@ -221,7 +221,13 @@ public class GameService {
         // 按游戏分库：生成数据库名称
         entity.databaseName = entity.databaseName != null ? entity.databaseName : generateDatabaseName(gameId, environmentName);
 
-        return new EnvironmentDTO(gameEnvironmentRepo.save(entity));
+        GameEnvironmentEntity saved = gameEnvironmentRepo.save(entity);
+        auditLog.logCreate("environment", saved.id, saved.name, "api", "api", null,
+            Map.of("gameId", gameId, "type", String.valueOf(saved.type),
+                "sampleRate", String.valueOf(saved.sampleRate),
+                "dataRetentionDays", String.valueOf(saved.dataRetentionDays),
+                "storageProfileId", String.valueOf(saved.storageProfileId)));
+        return new EnvironmentDTO(saved);
     }
 
     /**
@@ -230,11 +236,18 @@ public class GameService {
     public EnvironmentDTO updateEnvironment(String gameId, String environmentName, EnvironmentDTO dto) {
         GameEnvironmentEntity entity = findEnvironment(gameId, environmentName)
             .orElseThrow(() -> new IllegalArgumentException("Environment not found: " + environmentName));
+        Double sampleRateBefore = entity.sampleRate;
         dto.updateEntity(entity);
         if (entity.storageProfileId != null) {
             validateStorageProfile(entity.storageProfileId);
         }
-        return new EnvironmentDTO(gameEnvironmentRepo.save(entity));
+        GameEnvironmentEntity saved = gameEnvironmentRepo.save(entity);
+        auditLog.logUpdate("environment", saved.id, saved.name, "api", "api", null,
+            Map.of("gameId", gameId,
+                "sampleRateBefore", String.valueOf(sampleRateBefore),
+                "sampleRateAfter", String.valueOf(saved.sampleRate),
+                "dataRetentionDays", String.valueOf(saved.dataRetentionDays)));
+        return new EnvironmentDTO(saved);
     }
 
     /**
@@ -265,6 +278,7 @@ public class GameService {
         entity.status = GameEnvironmentEntity.EnvironmentStatus.INACTIVE;
         gameEnvironmentRepo.save(entity);
 
+        auditLog.logDelete("environment", entity.id, entity.name, "api", "api", null);
         logger.info("Environment deleted successfully: {} for game: {}", environmentName, gameId);
     }
 

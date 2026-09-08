@@ -17,8 +17,8 @@
 - [x] Environment API：`dev/staging/prod` 配置、采样、数据保留、策略绑定
 - [x] API Key 管理：绑定 `(game_id, environment)`，区分 `client/server/admin`
 - [x] Tracking Plan：事件名、字段字典、枚举、cardinality 上限
-- [ ] 公司内 RBAC：`global/game/environment` scope，角色包含 `owner/operator/analyst/developer/risk_admin/viewer`
-- [ ] 审计日志：策略、密钥、权限、风控动作全部记录
+- [x] 公司内 RBAC：`global/game/environment` scope，角色包含 `owner/operator/analyst/developer/risk_admin/viewer`
+- [x] 审计日志：策略、密钥、权限、风控动作全部记录
 
 ## P2 风控基础
 

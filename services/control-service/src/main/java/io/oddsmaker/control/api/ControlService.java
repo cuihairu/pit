@@ -19,15 +19,18 @@ public class ControlService {
     private final GameRepo gameRepo;
     private final GameEnvironmentRepo envRepo;
     private final StorageProfileRepo storageProfileRepo;
+    private final io.oddsmaker.control.service.AuditLogService auditLog;
 
     public ControlService(ApiKeyRepo keyRepo,
                           GameRepo gameRepo,
                           GameEnvironmentRepo envRepo,
-                          StorageProfileRepo storageProfileRepo) {
+                          StorageProfileRepo storageProfileRepo,
+                          io.oddsmaker.control.service.AuditLogService auditLog) {
         this.keyRepo = keyRepo;
         this.gameRepo = gameRepo;
         this.envRepo = envRepo;
         this.storageProfileRepo = storageProfileRepo;
+        this.auditLog = auditLog;
     }
 
     public Models.ApiKeyResp createKey(String gameId, String environmentId, String name) {
@@ -75,6 +78,10 @@ public class ControlService {
             }
         }
         keyRepo.save(e);
+        auditLog.logCreate("api_key", e.apiKey, e.name, "api", "api", null,
+            Map.of("gameId", gameId, "environmentId", environmentId,
+                "keyRole", String.valueOf(role),
+                "requireHmac", String.valueOf(e.requireHmac)));
         return toResp(e);
     }
 
@@ -128,12 +135,16 @@ public class ControlService {
     public boolean deleteKey(String apiKey) {
         if (!keyRepo.existsById(apiKey)) return false;
         keyRepo.deleteById(apiKey);
+        auditLog.logDelete("api_key", apiKey, null, "api", "api", null);
         return true;
     }
 
     public long deleteKeys(java.util.List<String> apiKeys) {
         if (apiKeys == null || apiKeys.isEmpty()) return 0L;
         keyRepo.deleteAllById(apiKeys);
+        for (String apiKey : apiKeys) {
+            auditLog.logDelete("api_key", apiKey, null, "api", "api", null);
+        }
         return apiKeys.size();
     }
 
@@ -144,6 +155,8 @@ public class ControlService {
 
     public Models.KeyDetailResp updatePolicy(String apiKey, Models.KeyDetailResp req) {
         return keyRepo.findById(apiKey).map(e -> {
+            Integer rpmBefore = e.rpm;
+            Integer ipRpmBefore = e.ipRpm;
             if (req.rpm != null) e.rpm = req.rpm;
             if (req.ipRpm != null) e.ipRpm = req.ipRpm;
             if (req.propsAllowlist != null) e.propsAllowlist = String.join(",", req.propsAllowlist);
@@ -153,6 +166,10 @@ public class ControlService {
             if (req.denyKeys != null) e.denyKeys = String.join(",", req.denyKeys);
             if (req.maskKeys != null) e.maskKeys = String.join(",", req.maskKeys);
             keyRepo.save(e);
+            auditLog.logUpdate("api_key", e.apiKey, e.name, "api", "api", null,
+                Map.of("gameId", String.valueOf(e.gameId),
+                    "rpmBefore", String.valueOf(rpmBefore), "rpmAfter", String.valueOf(e.rpm),
+                    "ipRpmBefore", String.valueOf(ipRpmBefore), "ipRpmAfter", String.valueOf(e.ipRpm)));
             return toDetail(e);
         }).orElse(null);
     }

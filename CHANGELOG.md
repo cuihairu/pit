@@ -1,6 +1,9 @@
 # Changelog
 
 ## v0.2.0 (unreleased)
+- 公司内 RBAC 落地：六角色权限矩阵（owner/operator/analyst/developer/risk_admin/viewer），支持 global/game/environment 三级 scope 分配与精确回收；新增 `/api/users/{userId}/role-assignments` API，GRANT_ROLE/REVOKE_ROLE 全量审计
+- 修复失效鉴权：RiskRuleController/ReportController 的 `@PreAuthorize(hasAuthority(...))` 无 authority 供给（实际永远拒绝），替换为 AccessGuard 显式 scope 检查；SecurityException 统一映射 403
+- 审计日志补齐密钥与环境资源：API Key 创建/策略变更/删除、环境创建/更新/删除全量记录（含变更前后值）
 - Tracking Plan 字段字典规格化：属性定义新增 `cardinalityLimit` 上限（防高基数字段打爆存储）；ENUM 类型强制要求非空、无重复的 allowedValues JSON 数组且 cardinalityLimit ≥ 候选数；ARRAY 强制声明 arrayElementType
 - 属性定义补齐 update/delete 接口（draft 计划内可编辑，软删除），增删改全量审计
 - 新增 TrackingPlanServiceTest 10 个用例覆盖字段字典校验矩阵
