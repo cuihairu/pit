@@ -1,6 +1,10 @@
 # Changelog
 
 ## v0.2.0 (unreleased)
+- 留存分析补齐 Rolling 口径：RetentionPolicy 抽取纯逻辑（可配 N-Day `retention.ndays`、Rolling `retention.rolling.ndays`）；Rolling 语义为第 N 天及以后任意一天活跃，最后活跃日跨越阈值时补记；新增 `retention_rolling` CH 表
+- 漏斗补齐无序口径：FunnelType 新增 UNORDERED；STANDARD/UNORDERED 走任意顺序完成判定（UnorderedFunnelLogic：全步骤完成 + 时间跨度约束，超窗重置，每用户一次转化）；SEQUENTIAL/TIME_WINDOW 保持原顺序推进逻辑
+- 事件类型推断补全九类：inferEventType 新增 user/resource/design 映射（session/user/business/resource/progression/design/error/ad/risk + experiment 附加）
+- Identity Merge、商业化（IAP/广告/LTV 视图）、玩法分析（关卡进度/经济流转视图）经核对已具备，勾选完成
 - 实验平台（A/B 测试）闭环：ExperimentSplitter 确定性分流（SHA-256(salt+subjectId) 分桶 + 权重分配，SDK/服务端算法一致）；服务端分流 API `GET /api/experiments/{id}/assign`（非 running 实验兜底 control）；指标快照接收 API（聚合管道按窗口幂等回填每变体 count/sum/sumSquares/successes）；结果 API 输出比例 z-test / Welch t-test 检验（lift、95% CI、p 值、显著性、小样本 low_power 提示），多变体以 control_variant 为基线两两对比
 - Gateway 风控前置：新增 ReplayGuard（签名重放 401 replay_detected、event_id 幂等吸收计入 duplicates），事件时间戳信差 ±24h 检查（invalid_timestamp）；黑名单/签名时间窗/非法环境/body size 此前已具备
 - Flink risk job 新增两类检测：DUPLICATE_RECEIPT（同 subject 同 receipt_hash/order_id 窗口内 ≥2 次，CRITICAL/REVIEW）、AD_REWARD（激励广告 reward 窗口超频，HIGH/ALERT）；RuleConfig 默认兜底同步扩展

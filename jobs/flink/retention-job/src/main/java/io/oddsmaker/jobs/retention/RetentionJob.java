@@ -34,6 +34,11 @@ public class RetentionJob {
         String chUser = System.getProperty("clickhouse.user", "default");
         String chPass = System.getProperty("clickhouse.pass", "");
 
+        // 可配置留存口径：N-Day（恰好第 N 天活跃）与 Rolling（第 N 天及以后任意活跃）
+        RetentionPolicy policy = new RetentionPolicy(
+            RetentionPolicy.parseDays(System.getProperty("retention.ndays", "1,7,30")),
+            RetentionPolicy.parseDays(System.getProperty("retention.rolling.ndays", "1,3,7,14,30")));
+
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
         KafkaSource<GenericRecord> source = KafkaSource.<GenericRecord>builder()
@@ -54,9 +59,12 @@ public class RetentionJob {
 
         DataStream<GenericRecord> stream = env.fromSource(source, wm, "events-raw");
 
-        stream
+        DataStream<RetentionEmit> emissions = stream
                 .keyBy(r -> (r.get("game_id")+"|"+r.get("environment")+"|"+ uidOf(r)))
-                .process(new RetentionProcess())
+                .process(new RetentionProcess(policy));
+
+        // N-Day 留存：恰好第 N 天活跃
+        emissions.filter(e -> e.rolling == 0)
                 .addSink(JdbcSink.sink(
                         "INSERT INTO retention_daily (game_id, environment, cohort_date, d, users) VALUES (?,?,?,?,?)",
                         (ps, row) -> {
@@ -70,7 +78,24 @@ public class RetentionJob {
                         new JdbcConnectionOptions.JdbcConnectionOptionsBuilder()
                                 .withUrl(chUrl).withDriverName("com.clickhouse.jdbc.ClickHouseDriver")
                                 .withUsername(chUser).withPassword(chPass).build()
-                ));
+                )).name("clickhouse-retention-nday");
+
+        // Rolling 留存：第 N 天及以后任意一天活跃
+        emissions.filter(e -> e.rolling > 0)
+                .addSink(JdbcSink.sink(
+                        "INSERT INTO retention_rolling (game_id, environment, cohort_date, n, users) VALUES (?,?,?,?,?)",
+                        (ps, row) -> {
+                            ps.setString(1, row.gameId);
+                            ps.setString(2, row.environment);
+                            ps.setDate(3, new java.sql.Date(row.cohortDate.toEpochDay()*24*3600*1000));
+                            ps.setInt(4, row.d);
+                            ps.setLong(5, 1L);
+                        },
+                        JdbcExecutionOptions.builder().withBatchIntervalMs(1000).withBatchSize(2000).withMaxRetries(3).build(),
+                        new JdbcConnectionOptions.JdbcConnectionOptionsBuilder()
+                                .withUrl(chUrl).withDriverName("com.clickhouse.jdbc.ClickHouseDriver")
+                                .withUsername(chUser).withPassword(chPass).build()
+                )).name("clickhouse-retention-rolling");
 
         env.execute("oddsmaker-retention");
     }
@@ -81,12 +106,18 @@ public class RetentionJob {
         return String.valueOf(r.get("device_id"));
     }
 
+    /** rolling=0 为 N-Day 输出；rolling>0 表示 rolling 留存的 N */
     static class RetentionEmit {
-        String gameId; String environment; LocalDate cohortDate; int d;
+        String gameId; String environment; LocalDate cohortDate; int d; int rolling;
     }
 
     static class RetentionProcess extends KeyedProcessFunction<String, GenericRecord, RetentionEmit> {
-        private transient MapState<String, Long> state; // keys: firstDay, seen_d_<d>
+        private final RetentionPolicy policy;
+        private transient MapState<String, Long> state; // keys: first, last, seen_d_<n>, seen_r_<n>
+
+        RetentionProcess(RetentionPolicy policy) {
+            this.policy = policy;
+        }
 
         @Override
         public void open(org.apache.flink.configuration.Configuration parameters) {
@@ -111,15 +142,36 @@ public class RetentionJob {
             if (first == null) {
                 long epochDay = day.toEpochDay();
                 state.put("first", epochDay);
-                RetentionEmit r0 = new RetentionEmit(); r0.gameId = gameId; r0.environment = environment; r0.cohortDate = day; r0.d = 0; out.collect(r0);
+                state.put("last", epochDay);
+                RetentionEmit r0 = new RetentionEmit();
+                r0.gameId = gameId; r0.environment = environment; r0.cohortDate = day; r0.d = 0; r0.rolling = 0;
+                out.collect(r0);
                 return;
             }
-            int d = (int)(day.toEpochDay() - first);
-            if (d == 1 || d == 7 || d == 30) {
-                String key = "seen_d_"+d;
-                if (state.get(key) == null) {
-                    state.put(key, 1L);
-                    RetentionEmit r = new RetentionEmit(); r.gameId = gameId; r.environment = environment; r.cohortDate = LocalDate.ofEpochDay(first); r.d = d; out.collect(r);
+
+            long prevLast = state.get("last") == null ? first : state.get("last");
+
+            // N-Day：恰好命中
+            int n = policy.nDayHit(first, day.toEpochDay());
+            if (n > 0 && state.get("seen_d_" + n) == null) {
+                state.put("seen_d_" + n, 1L);
+                RetentionEmit r = new RetentionEmit();
+                r.gameId = gameId; r.environment = environment;
+                r.cohortDate = LocalDate.ofEpochDay(first); r.d = n; r.rolling = 0;
+                out.collect(r);
+            }
+
+            // Rolling：最后活跃日推进跨越的阈值补记（乱序回退不处理）
+            if (day.toEpochDay() > prevLast) {
+                state.put("last", day.toEpochDay());
+                for (int rn : policy.rollingCrossed(first, prevLast, day.toEpochDay())) {
+                    if (state.get("seen_r_" + rn) == null) {
+                        state.put("seen_r_" + rn, 1L);
+                        RetentionEmit r = new RetentionEmit();
+                        r.gameId = gameId; r.environment = environment;
+                        r.cohortDate = LocalDate.ofEpochDay(first); r.d = rn; r.rolling = rn;
+                        out.collect(r);
+                    }
                 }
             }
         }

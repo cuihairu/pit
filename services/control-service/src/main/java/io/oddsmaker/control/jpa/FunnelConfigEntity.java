@@ -76,9 +76,10 @@ public class FunnelConfigEntity {
      * 漏斗类型枚举
      */
     public enum FunnelType {
-        STANDARD,      // 标准漏斗（任意顺序）
+        STANDARD,      // 标准漏斗（任意顺序完成全部步骤即转化）
         SEQUENTIAL,    // 顺序漏斗（必须按顺序完成）
-        TIME_WINDOW    // 时间窗口漏斗（在指定时间内完成）
+        TIME_WINDOW,   // 时间窗口漏斗（在指定时间内完成）
+        UNORDERED      // 无序漏斗（任意顺序，与 STANDARD 同语义的显式声明）
     }
 
     // 业务方法

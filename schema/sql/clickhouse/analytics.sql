@@ -29,3 +29,16 @@ CREATE TABLE IF NOT EXISTS funnels_2step
 ENGINE = SummingMergeTree
 PARTITION BY (game_id, environment, toYYYYMM(event_date))
 ORDER BY (game_id, environment, event_date, step1, step2);
+
+-- Rolling 留存：第 n 天及以后任意一天活跃（无界口径）
+CREATE TABLE IF NOT EXISTS retention_rolling
+(
+  game_id LowCardinality(String),
+  environment LowCardinality(String),
+  cohort_date Date,
+  n UInt16,
+  users UInt64
+)
+ENGINE = SummingMergeTree
+PARTITION BY (game_id, environment, toYYYYMM(cohort_date))
+ORDER BY (game_id, environment, cohort_date, n);

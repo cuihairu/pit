@@ -416,6 +416,10 @@ public class BatchController {
         }
     }
 
+    /**
+     * 事件类型推断：P3 九类 session/user/business/resource/progression/design/error/ad/risk
+     * （experiment 为平台附加类型）。SDK 未显式声明 event_type 时按事件名关键词推断。
+     */
     private String inferEventType(String eventName) {
         if (eventName == null) {
             return "business";
@@ -427,10 +431,10 @@ public class BatchController {
         if (name.contains("experiment")) {
             return "experiment";
         }
-        if (name.contains("ad_")) {
+        if (name.contains("ad_") || name.startsWith("ad")) {
             return "ad";
         }
-        if (name.contains("level") || name.contains("quest")) {
+        if (name.contains("level") || name.contains("quest") || name.contains("achievement")) {
             return "progression";
         }
         if (name.contains("session")) {
@@ -438,6 +442,17 @@ public class BatchController {
         }
         if (name.contains("error") || name.contains("crash")) {
             return "error";
+        }
+        if (name.contains("resource_") || name.contains("currency_")
+                || name.contains("item_") || name.contains("economy")) {
+            return "resource";
+        }
+        if (name.contains("user") || name.contains("login") || name.contains("register")
+                || name.contains("signup") || name.contains("auth")) {
+            return "user";
+        }
+        if (name.startsWith("design")) {
+            return "design";
         }
         return "business";
     }

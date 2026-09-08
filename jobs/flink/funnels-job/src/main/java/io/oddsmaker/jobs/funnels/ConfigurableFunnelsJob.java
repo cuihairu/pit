@@ -251,23 +251,23 @@ public class ConfigurableFunnelsJob {
     static class ConfigurableFunnelProcess extends KeyedProcessFunction<String, GenericRecord, FunnelRow> {
         private final FunnelConfig config;
         private transient MapState<String, Long> state;
-        
-        public ConfigurableFunnelProcess(FunnelConfig config) {
+
+        ConfigurableFunnelProcess(FunnelConfig config) {
             this.config = config;
         }
-        
+
         @Override
         public void open(org.apache.flink.configuration.Configuration parameters) {
             StateTtlConfig ttl = StateTtlConfig.newBuilder(Time.days(40)).build();
             MapStateDescriptor<String, Long> desc = new MapStateDescriptor<>(
-                "funnel_state_" + config.id, 
-                TypeInformation.of(String.class), 
+                "funnel_state_" + config.id,
+                TypeInformation.of(String.class),
                 TypeInformation.of(Long.class)
             );
             desc.enableTimeToLive(ttl);
             state = getRuntimeContext().getMapState(desc);
         }
-        
+
         @Override
         public void processElement(GenericRecord value, Context ctx, Collector<FunnelRow> out) throws Exception {
             String gameId = value.get("game_id").toString();
@@ -275,133 +275,140 @@ public class ConfigurableFunnelsJob {
             String eventName = value.get("event_name").toString();
             long ts = tsMs(value);
             long day = ts / 86_400_000L;
-            
-            // 查找当前事件对应的步骤
-            int currentStepIndex = -1;
-            for (int i = 0; i < config.steps.size(); i++) {
-                if (config.steps.get(i).eventName.equals(eventName)) {
-                    currentStepIndex = i;
-                    break;
-                }
-            }
-            
+
+            int currentStepIndex = stepIndexOf(eventName);
             if (currentStepIndex < 0) {
                 return;
             }
-            
             FunnelStep currentStep = config.steps.get(currentStepIndex);
-            
-            // 检查是否为第一步
-            if (currentStepIndex == 0) {
-                // 记录第一步开始
-                String key = "started_day_" + day;
-                Long seen = state.get(key);
-                if (seen == null) {
-                    state.put(key, 1L);
-                    
-                    FunnelRow row = new FunnelRow();
-                    row.gameId = gameId;
-                    row.environment = environment;
-                    row.funnelId = config.id;
-                    row.eventDateEpochDay = day;
-                    row.step = 1;
-                    row.stepName = currentStep.name;
-                    row.users = 1;
-                    row.conversionRate = 100.0;
-                    
-                    out.collect(row);
-                }
-                
-                // 记录第一步时间戳
-                state.put("step_0_ts", ts);
-            } else {
-                // 检查前一步是否完成
-                int prevStepIndex = currentStepIndex - 1;
-                FunnelStep prevStep = config.steps.get(prevStepIndex);
-                
-                Long prevTs = state.get("step_" + prevStepIndex + "_ts");
-                if (prevTs != null) {
-                    // 检查时间窗口
-                    long timeWindow = currentStep.timeWindowSec > 0 ? 
-                        currentStep.timeWindowSec * 1000 : 
-                        (config.timeWindowSec > 0 ? config.timeWindowSec * 1000 : 24 * 3600 * 1000);
-                    
-                    if (ts - prevTs <= timeWindow) {
-                        // 记录当前步骤完成
-                        String key = "step_" + currentStepIndex + "_day_" + day;
-                        Long seen = state.get(key);
-                        if (seen == null) {
-                            state.put(key, 1L);
-                            
-                            // 计算转化率
-                            String startedKey = "started_day_" + day;
-                            Long started = state.get(startedKey);
-                            long startedCount = started != null ? started : 0;
-                            double conversionRate = startedCount > 0 ? 
-                                (1.0 / startedCount) * 100.0 : 0.0;
-                            
-                            FunnelRow row = new FunnelRow();
-                            row.gameId = gameId;
-                            row.environment = environment;
-                            row.funnelId = config.id;
-                            row.eventDateEpochDay = day;
-                            row.step = currentStepIndex + 1;
-                            row.stepName = currentStep.name;
-                            row.users = 1;
-                            row.conversionRate = conversionRate;
-                            
-                            out.collect(row);
-                        }
-                        
-                        // 记录当前步骤时间戳
-                        state.put("step_" + currentStepIndex + "_ts", ts);
+
+            // STANDARD / UNORDERED：任意顺序完成全部步骤即转化（时间跨度约束）
+            if (isUnordered()) {
+                processUnordered(gameId, environment, currentStepIndex, currentStep, ts, day, out);
+                return;
+            }
+
+            // SEQUENTIAL / TIME_WINDOW：按步骤顺序推进
+            processSequential(gameId, environment, currentStepIndex, currentStep, ts, day, out);
+        }
+
+        private boolean isUnordered() {
+            String t = config.type == null ? "" : config.type.toUpperCase();
+            return "STANDARD".equals(t) || "UNORDERED".equals(t);
+        }
+
+        /**
+         * 无序漏斗：记录每步首次完成时间；全部完成且跨度 <= 窗口 -> 每步计数一次（converted 去重）；
+         * 跨度超窗 -> 重置状态，当前事件作为新一轮起点。
+         */
+        private void processUnordered(String gameId, String environment, int stepIndex, FunnelStep step,
+                                      long ts, long day, Collector<FunnelRow> out) throws Exception {
+            if (state.get("converted") != null) {
+                return; // 每用户只计一次转化
+            }
+
+            String stepKey = "u_step_" + stepIndex + "_ts";
+            if (state.get(stepKey) == null) {
+                state.put(stepKey, ts);
+                emitStep(gameId, environment, stepIndex, step, day, out);
+            }
+
+            java.util.Map<Integer, Long> stepFirstTs = new java.util.HashMap<>();
+            for (int i = 0; i < config.steps.size(); i++) {
+                Long v = state.get("u_step_" + i + "_ts");
+                if (v != null) stepFirstTs.put(i, v);
+            }
+
+            long windowMs = funnelWindowMs();
+            if (UnorderedFunnelLogic.allStepsDone(config.steps.size(), stepFirstTs)) {
+                if (UnorderedFunnelLogic.spanMs(stepFirstTs) <= windowMs) {
+                    state.put("converted", 1L);
+                } else {
+                    // 超窗重置：当前事件作为新一轮起点
+                    for (int i = 0; i < config.steps.size(); i++) {
+                        state.remove("u_step_" + i + "_ts");
                     }
-                } else if (currentStep.optional) {
-                    // 如果当前步骤是可选的，检查前几步
-                    for (int i = prevStepIndex - 1; i >= 0; i--) {
-                        Long prevPrevTs = state.get("step_" + i + "_ts");
-                        if (prevPrevTs != null) {
-                            long timeWindow = currentStep.timeWindowSec > 0 ? 
-                                currentStep.timeWindowSec * 1000 : 
-                                (config.timeWindowSec > 0 ? config.timeWindowSec * 1000 : 24 * 3600 * 1000);
-                            
-                            if (ts - prevPrevTs <= timeWindow) {
-                                // 记录当前步骤完成
-                                String key = "step_" + currentStepIndex + "_day_" + day;
-                                Long seen = state.get(key);
-                                if (seen == null) {
-                                    state.put(key, 1L);
-                                    
-                                    // 计算转化率
-                                    String startedKey = "started_day_" + day;
-                                    Long started = state.get(startedKey);
-                                    long startedCount = started != null ? started : 0;
-                                    double conversionRate = startedCount > 0 ? 
-                                        (1.0 / startedCount) * 100.0 : 0.0;
-                                    
-                                    FunnelRow row = new FunnelRow();
-                                    row.gameId = gameId;
-                                    row.environment = environment;
-                                    row.funnelId = config.id;
-                                    row.eventDateEpochDay = day;
-                                    row.step = currentStepIndex + 1;
-                                    row.stepName = currentStep.name;
-                                    row.users = 1;
-                                    row.conversionRate = conversionRate;
-                                    
-                                    out.collect(row);
-                                }
-                                
-                                // 记录当前步骤时间戳
-                                state.put("step_" + currentStepIndex + "_ts", ts);
-                                break;
-                            }
+                    state.put("u_step_" + stepIndex + "_ts", ts);
+                }
+            }
+        }
+
+        /**
+         * 顺序漏斗（原逻辑）：按步骤推进 + 步骤级时间窗。
+         */
+        private void processSequential(String gameId, String environment, int stepIndex, FunnelStep step,
+                                       long ts, long day, Collector<FunnelRow> out) throws Exception {
+            if (stepIndex == 0) {
+                String key = "started_day_" + day;
+                if (state.get(key) == null) {
+                    state.put(key, 1L);
+                    emitStep(gameId, environment, stepIndex, step, day, out);
+                }
+                state.put("step_0_ts", ts);
+                return;
+            }
+
+            int prevStepIndex = stepIndex - 1;
+            Long prevTs = state.get("step_" + prevStepIndex + "_ts");
+            if (prevTs != null && ts - prevTs <= stepWindowMs(step)) {
+                String key = "step_" + stepIndex + "_day_" + day;
+                if (state.get(key) == null) {
+                    state.put(key, 1L);
+                    emitStep(gameId, environment, stepIndex, step, day, out);
+                }
+                state.put("step_" + stepIndex + "_ts", ts);
+            } else if (step.optional) {
+                for (int i = prevStepIndex - 1; i >= 0; i--) {
+                    Long prevPrevTs = state.get("step_" + i + "_ts");
+                    if (prevPrevTs != null && ts - prevPrevTs <= stepWindowMs(step)) {
+                        String key = "step_" + stepIndex + "_day_" + day;
+                        if (state.get(key) == null) {
+                            state.put(key, 1L);
+                            emitStep(gameId, environment, stepIndex, step, day, out);
                         }
+                        state.put("step_" + stepIndex + "_ts", ts);
+                        break;
                     }
                 }
             }
         }
-        
+
+        private void emitStep(String gameId, String environment, int stepIndex, FunnelStep step,
+                              long day, Collector<FunnelRow> out) {
+            FunnelRow row = new FunnelRow();
+            row.gameId = gameId;
+            row.environment = environment;
+            row.funnelId = config.id;
+            row.eventDateEpochDay = day;
+            row.step = stepIndex + 1;
+            row.stepName = step.name;
+            row.users = 1;
+            // 行级恒为 1；真实转化率由 ClickHouse SummingMergeTree 汇总后按步计算
+            row.conversionRate = 100.0;
+            out.collect(row);
+        }
+
+        private int stepIndexOf(String eventName) {
+            for (int i = 0; i < config.steps.size(); i++) {
+                if (config.steps.get(i).eventName.equals(eventName)) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        private long stepWindowMs(FunnelStep step) {
+            long windowSec = step.timeWindowSec > 0
+                ? step.timeWindowSec
+                : (config.timeWindowSec > 0 ? config.timeWindowSec : 24 * 3600);
+            return windowSec * 1000;
+        }
+
+        private long funnelWindowMs() {
+            long windowSec = config.timeWindowSec > 0 ? config.timeWindowSec : 24 * 3600;
+            return windowSec * 1000;
+        }
+
         private long tsMs(GenericRecord r) {
             Long tsServer = (Long) r.get("ts_server");
             Long tsClient = (Long) r.get("ts_client");
