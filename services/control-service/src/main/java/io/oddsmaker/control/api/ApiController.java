@@ -46,7 +46,7 @@ public class ApiController {
 
     @PostMapping("/keys")
     public Models.ApiKeyResp createKey(@RequestBody Models.CreateKeyReq req) {
-        return svc.createKey(req.gameId, req.environmentId, req.name);
+        return svc.createKey(req.gameId, req.environmentId, req.name, req.keyRole);
     }
 
     @PostMapping("/api-keys")

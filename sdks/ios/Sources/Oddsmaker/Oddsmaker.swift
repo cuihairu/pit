@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 import UIKit
 
 public struct OddsmakerOptions {
@@ -13,12 +12,7 @@ public struct OddsmakerOptions {
     public var maxQueueBytes: Int = 512_000
     public var sessionGapSec: TimeInterval = 30 * 60
     public var debug: Bool = false
-    
-    // HMAC配置
-    public var hmacSecret: String?
-    public var hmacAlgorithm: HMACManager.Algorithm = .sha256
-    public var enableHMAC: Bool = false
-    
+
     // 错误处理配置
     public var logLevel: ErrorHandler.LogLevel = .warning
     public var onError: ((OddsmakerError) -> Void)?
@@ -50,7 +44,6 @@ public final class Oddsmaker {
     
     // 管理器
     private var cacheManager: CacheManager?
-    private var hmacManager: HMACManager?
     private var errorHandler: ErrorHandler?
 
     private var queuePath: URL {
@@ -69,11 +62,8 @@ public final class Oddsmaker {
             errorCallback: options.onError
         )
         
-        // 初始化HMAC管理器
-        if options.enableHMAC, let secret = options.hmacSecret {
-            self.hmacManager = HMACManager(secret: secret, algorithm: options.hmacAlgorithm)
-        }
-        
+        // 客户端 SDK 不持有签名密钥；HMAC 仅适用于 Server SDK。
+
         self.deviceId = options.deviceId ?? Self.loadOrCreateDeviceId(gameId: options.gameId, environment: options.environment)
         self.restoreQueue()
         self.lastActive = Date().timeIntervalSince1970
@@ -166,11 +156,6 @@ public final class Oddsmaker {
 
         let body = Data(ndjson.utf8)
         req.httpBody = body
-        
-        // 添加HMAC签名
-        if let hmac = hmacManager {
-            req = hmac.signRequest(req, body: body)
-        }
 
         let sem = DispatchSemaphore(value: 0)
         var success = false
@@ -505,12 +490,7 @@ public final class Oddsmaker {
         var req = URLRequest(url: u)
         req.httpMethod = "GET"
         req.setValue("application/json", forHTTPHeaderField: "accept")
-        
-        // 添加HMAC签名
-        if let hmac = hmacManager {
-            req = hmac.signRequest(req, body: nil)
-        }
-        
+
         URLSession.shared.dataTask(with: req) { data, resp, err in
             if let error = err {
                 self.errorHandler?.error("Failed to fetch experiments: \(error.localizedDescription)")

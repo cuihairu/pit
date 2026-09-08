@@ -8,21 +8,21 @@
 - [ ] Gateway 兼容层：旧 `project_id`、`tenant_id/app_id` 映射到新字段
 - [ ] ClickHouse 新建 `events_v1`，按 `(game_id, environment, event_date)` 分区
 - [ ] Flink 作业按 `game_id + environment` 重写 key
-- [ ] SDK 参数统一：客户端只传 `apiKey/gameId/environment`
-- [ ] 移除客户端 SDK HMAC secret；HMAC 仅保留给 Server SDK
+- [ ] SDK 参数统一：客户端只传 `apiKey/gameId/environment`（Web/Android 已符合；iOS/Unity 清理中）
+- [x] 移除客户端 SDK HMAC secret；HMAC 仅保留给 Server SDK
 
 ## P1 单公司多游戏控制面
 
 - [ ] Game API：游戏增删改查、状态、平台、默认时区、默认货币
 - [ ] Environment API：`dev/staging/prod` 配置、采样、数据保留、策略绑定
-- [ ] API Key 管理：绑定 `(game_id, environment)`，区分 `client/server/admin`
+- [x] API Key 管理：绑定 `(game_id, environment)`，区分 `client/server/admin`
 - [ ] Tracking Plan：事件名、字段字典、枚举、cardinality 上限
 - [ ] 公司内 RBAC：`global/game/environment` scope，角色包含 `owner/operator/analyst/developer/risk_admin/viewer`
 - [ ] 审计日志：策略、密钥、权限、风控动作全部记录
 
 ## P2 风控基础
 
-- [ ] RiskRule API：阈值、黑名单、速度、序列、模型规则
+- [x] RiskRule API：阈值、黑名单、速度、序列、模型规则
 - [ ] Gateway 风控前置：黑名单、重放、时间窗、非法环境、body size
 - [ ] Flink risk job：高频事件、重复收据、资源异常、广告 reward 异常
 - [ ] ClickHouse 表：`risk_events`、`risk_scores`、`risk_actions`

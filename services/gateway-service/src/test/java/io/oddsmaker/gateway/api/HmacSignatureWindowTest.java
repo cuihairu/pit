@@ -66,6 +66,42 @@ class HmacSignatureWindowTest {
                 .expectStatus().isUnauthorized();
     }
 
+    @Test
+    void clientKeyWithSignatureRejected() {
+        AuthService.ApiKeyContext ctx = newContext(null);
+        ctx.keyRole = "client";
+        when(authService.getContext("pk_client")).thenReturn(ctx);
+        String body = "{" +
+                "\"event_id\":\"01JHMACCL\",\"event_name\":\"level_start\",\"game_id\":\"game_demo\",\"environment\":\"prod\",\"device_id\":\"d1\",\"ts_client\":1730000000000}";
+        long t = Instant.now().getEpochSecond();
+        String sig = HmacSigner.hmacSha256Hex("whatever", t + "." + body);
+        client.post().uri("/v1/batch")
+                .contentType(MediaType.valueOf("application/x-ndjson"))
+                .header("x-api-key", "pk_client")
+                .header("x-signature", "t="+t+", s="+sig)
+                .bodyValue(body)
+                .exchange()
+                .expectStatus().isUnauthorized()
+                .expectBody().jsonPath("$.error").isEqualTo("signature_not_supported");
+    }
+
+    @Test
+    void serverKeyWithoutSignatureRejected() {
+        AuthService.ApiKeyContext ctx = newContext("sek");
+        ctx.keyRole = "server";
+        ctx.requireHmac = true;
+        when(authService.getContext("pk_server")).thenReturn(ctx);
+        String body = "{" +
+                "\"event_id\":\"JHMACSVR01\",\"event_name\":\"level_start\",\"game_id\":\"game_demo\",\"environment\":\"prod\",\"device_id\":\"d1\",\"ts_client\":1730000000000}";
+        client.post().uri("/v1/batch")
+                .contentType(MediaType.valueOf("application/x-ndjson"))
+                .header("x-api-key", "pk_server")
+                .bodyValue(body)
+                .exchange()
+                .expectStatus().isUnauthorized()
+                .expectBody().jsonPath("$.error").isEqualTo("missing_signature");
+    }
+
     private static AuthService.ApiKeyContext newContext(String secret) {
         AuthService.ApiKeyContext ctx = new AuthService.ApiKeyContext();
         ctx.apiKey = "pk_hmac";

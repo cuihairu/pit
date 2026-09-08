@@ -1,6 +1,7 @@
 package io.oddsmaker.control.jpa;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -9,7 +10,7 @@ import java.util.List;
 import java.util.Optional;
 
 @Repository
-public interface RiskRuleRepo extends JpaRepository<RiskRuleEntity, String> {
+public interface RiskRuleRepo extends JpaRepository<RiskRuleEntity, String>, JpaSpecificationExecutor<RiskRuleEntity> {
 
     /**
      * 查找游戏的所有风控规则

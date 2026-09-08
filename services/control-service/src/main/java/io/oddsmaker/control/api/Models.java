@@ -15,12 +15,14 @@ public class Models {
         public String environmentId;
         public String storageProfileId;
         public String name;
+        public String keyRole; // client|server|admin
     }
 
     public static class CreateKeyReq {
         public String gameId;
         public String environmentId;
         public String name;
+        public String keyRole; // client|server|admin，默认 client
     }
 
     public static class KeyDetailResp {
@@ -28,6 +30,7 @@ public class Models {
         public String gameId;
         public String environmentId;
         public String storageProfileId;
+        public String keyRole; // client|server|admin
         public Integer rpm;
         public Integer ipRpm;
         public List<String> propsAllowlist;
@@ -47,6 +50,7 @@ public class Models {
         public String secret;
         public String gameId;
         public String environment;
+        public String keyRole; // client|server|admin
         public Boolean canWrite;
         public Boolean requireHmac;
         public Integer rpm;

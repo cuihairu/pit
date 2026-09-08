@@ -46,6 +46,12 @@ public class HmacFilter implements WebFilter {
             return chain.filter(exchange);
         }
 
+        // 客户端 key 不持有签名密钥，携带签名头一律视为异常请求；
+        // 无 secret 的 key 无法验签，直接拒绝而不是放行或 NPE。
+        if ("client".equalsIgnoreCase(keyContext.keyRole) || secret == null || secret.isEmpty()) {
+            return unauthorized(exchange, "signature_not_supported");
+        }
+
         // 签名格式: t=TIMESTAMP, s=hex(hmacSha256(secret, t + '.' + body))
         String tPrefix = "t=";
         String sPrefix = "s=";

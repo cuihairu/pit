@@ -33,11 +33,11 @@ public class ApiKeyEntity {
     public String description;
 
     /**
-     * API Key类型: production, staging, development, testing
+     * API Key用途: client（游戏客户端，明文 apiKey）、server（游戏服，强制 HMAC）、admin（管理查询）
      */
     @Enumerated(EnumType.STRING)
     @Column(name = "key_type")
-    public ApiKeyType keyType = ApiKeyType.PRODUCTION;
+    public ApiKeyType keyType = ApiKeyType.CLIENT;
 
     /**
      * API Key状态: active, inactive, revoked
@@ -150,10 +150,9 @@ public class ApiKeyEntity {
     public UserEntity creator;
 
     public enum ApiKeyType {
-        PRODUCTION,  // 生产环境
-        STAGING,     // 预发环境
-        DEVELOPMENT, // 开发环境
-        TESTING      // 测试环境
+        CLIENT,  // 客户端 SDK：仅 x-api-key，不可持有 secret
+        SERVER,  // Server SDK：强制 HMAC 签名
+        ADMIN    // 管理/查询：只读，不可写入事件
     }
 
     public enum ApiKeyStatus {

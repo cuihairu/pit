@@ -31,6 +31,10 @@ public class ControlService {
     }
 
     public Models.ApiKeyResp createKey(String gameId, String environmentId, String name) {
+        return createKey(gameId, environmentId, name, null);
+    }
+
+    public Models.ApiKeyResp createKey(String gameId, String environmentId, String name, String keyRole) {
         GameEntity game = gameRepo.findById(gameId)
             .filter(entity -> entity.deletedAt == null)
             .orElseThrow(() -> new IllegalArgumentException("Game not found: " + gameId));
@@ -43,13 +47,46 @@ public class ControlService {
             throw new IllegalArgumentException("Environment does not belong to game: " + environmentId);
         }
 
+        ApiKeyEntity.ApiKeyType role = parseKeyRole(keyRole);
+
         ApiKeyEntity e = new ApiKeyEntity();
         e.apiKey = gen("pk_"); e.secret = gen("sk_");
         e.gameId = gameId;
         e.environmentId = environmentId;
         e.name = name; e.rpm = 600; e.ipRpm = 300;
+        e.keyType = role;
+        switch (role) {
+            case SERVER -> {
+                // Server SDK 持有 secret，必须强制签名
+                e.requireHmac = true;
+                e.canWrite = true;
+            }
+            case ADMIN -> {
+                // 管理查询用途：只读
+                e.canWrite = false;
+                e.canRead = true;
+                e.canExport = true;
+                e.requireHmac = true;
+            }
+            default -> {
+                // 客户端 key 不持有签名密钥
+                e.requireHmac = false;
+                e.canWrite = true;
+            }
+        }
         keyRepo.save(e);
         return toResp(e);
+    }
+
+    private ApiKeyEntity.ApiKeyType parseKeyRole(String keyRole) {
+        if (keyRole == null || keyRole.isBlank()) {
+            return ApiKeyEntity.ApiKeyType.CLIENT;
+        }
+        try {
+            return ApiKeyEntity.ApiKeyType.valueOf(keyRole.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("Invalid keyRole: " + keyRole + " (expected client|server|admin)");
+        }
     }
 
     public Models.KeyDetailResp getKey(String apiKey) {
@@ -195,6 +232,7 @@ public class ControlService {
         out.gameId = e.gameId; out.environmentId = e.environmentId;
         out.storageProfileId = storageProfileIdFor(e.environmentId);
         out.name = e.name;
+        out.keyRole = e.keyType == null ? null : e.keyType.name().toLowerCase(Locale.ROOT);
         return out;
     }
 
@@ -203,6 +241,7 @@ public class ControlService {
         r.apiKey = e.apiKey;
         r.gameId = e.gameId; r.environmentId = e.environmentId;
         r.storageProfileId = storageProfileIdFor(e.environmentId);
+        r.keyRole = e.keyType == null ? null : e.keyType.name().toLowerCase(Locale.ROOT);
         r.rpm = e.rpm; r.ipRpm = e.ipRpm;
         r.propsAllowlist = split(e.propsAllowlist);
         r.piiEmail = e.piiEmail; r.piiPhone = e.piiPhone; r.piiIp = e.piiIp;
@@ -216,6 +255,7 @@ public class ControlService {
         out.secret = key.secret;
         out.gameId = key.gameId;
         out.environment = environment.name;
+        out.keyRole = key.keyType == null ? null : key.keyType.name().toLowerCase(Locale.ROOT);
         out.canWrite = key.canWrite;
         out.requireHmac = key.requireHmac;
         out.rpm = key.rpm;

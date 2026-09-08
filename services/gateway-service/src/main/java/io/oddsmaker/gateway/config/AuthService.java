@@ -35,6 +35,7 @@ public class AuthService {
         public String secret;
         public String gameId;
         public String environment;
+        public String keyRole; // client|server|admin
         public Boolean canWrite;
         public Boolean requireHmac;
         public Integer rpm;

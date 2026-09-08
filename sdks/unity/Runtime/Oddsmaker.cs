@@ -1,5 +1,6 @@
 // Oddsmaker Unity SDK (Runtime)
-// Complete implementation with HMAC, caching, error handling, and experiment support.
+// Complete implementation with caching, error handling, and experiment support.
+// Client SDK 不持有任何签名密钥；HMAC 签名仅适用于 Server SDK。
 
 using System;
 using System.Collections;
@@ -26,10 +27,6 @@ namespace Oddsmaker
         public int maxQueueBytes = 512 * 1024;
         public int sessionGapSec = 30 * 60;
         public bool debug = false;
-        
-        // HMAC配置
-        public string hmacSecret = null;
-        public bool enableHMAC = false;
         
         // 重试配置
         public int maxRetries = 3;
@@ -402,15 +399,6 @@ namespace Oddsmaker
                 req.SetRequestHeader("x-sdk-version", "unity-1.0.0");
                 if (gzOk) req.SetRequestHeader("content-encoding", "gzip");
 
-                // 添加HMAC签名
-                if (_opts.enableHMAC && !string.IsNullOrEmpty(_opts.hmacSecret))
-                {
-                    string timestamp = (NowMs() / 1000).ToString();
-                    string signature = GenerateHMACSignature(timestamp, body);
-                    req.SetRequestHeader("x-timestamp", timestamp);
-                    req.SetRequestHeader("x-signature", signature);
-                }
-
                 yield return req.SendWebRequest();
                 
                 if (req.result == UnityWebRequest.Result.Success && req.responseCode >= 200 && req.responseCode < 300)
@@ -455,15 +443,7 @@ namespace Oddsmaker
             using (var req = UnityWebRequest.Get(url))
             {
                 req.SetRequestHeader("accept", "application/json");
-                
-                if (_opts.enableHMAC && !string.IsNullOrEmpty(_opts.hmacSecret))
-                {
-                    string timestamp = (NowMs() / 1000).ToString();
-                    string signature = GenerateHMACSignature(timestamp, null);
-                    req.SetRequestHeader("x-timestamp", timestamp);
-                    req.SetRequestHeader("x-signature", signature);
-                }
-                
+
                 yield return req.SendWebRequest();
                 
                 if (req.result == UnityWebRequest.Result.Success)
@@ -637,26 +617,6 @@ namespace Oddsmaker
             catch
             {
                 return null;
-            }
-        }
-
-        private string GenerateHMACSignature(string timestamp, byte[] body)
-        {
-            try
-            {
-                string bodyStr = body != null ? Encoding.UTF8.GetString(body) : "";
-                string message = timestamp + "\n" + bodyStr;
-                
-                using (var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(_opts.hmacSecret)))
-                {
-                    byte[] hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(message));
-                    return BitConverter.ToString(hash).Replace("-", "").ToLower();
-                }
-            }
-            catch (Exception ex)
-            {
-                LogDebug($"HMAC signature error: {ex.Message}");
-                return "";
             }
         }
 
