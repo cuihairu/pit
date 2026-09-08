@@ -8,6 +8,7 @@ import io.oddsmaker.control.dto.ExperimentConfigDTO;
 import io.oddsmaker.control.dto.ExperimentDTO;
 import io.oddsmaker.control.experiment.ExperimentEntity;
 import io.oddsmaker.control.experiment.ExperimentRepo;
+import io.oddsmaker.control.experiment.ExperimentSplitter;
 import io.oddsmaker.control.jpa.GameEntity;
 import io.oddsmaker.control.jpa.GameEnvironmentEntity;
 import io.oddsmaker.control.jpa.GameEnvironmentRepo;
@@ -188,6 +189,30 @@ public class ExperimentService {
         return experimentRepo.findRunningConfigs(gameId, environment.id).stream()
             .map(this::toConfigDto)
             .collect(Collectors.toList());
+    }
+
+    /**
+     * 服务端分流：为主体分配变体（仅 running 实验分流，draft/paused 返回 null 由调用方兜底）。
+     * 与 SDK 端使用相同的确定性哈希算法（ExperimentSplitter）。
+     */
+    @Transactional(readOnly = true)
+    public String assign(String experimentId, String subjectId) {
+        if (subjectId == null || subjectId.isBlank()) {
+            throw new IllegalArgumentException("subjectId is required");
+        }
+        ExperimentEntity entity = experimentRepo.findById(experimentId)
+            .orElseThrow(() -> new IllegalArgumentException("Experiment not found: " + experimentId));
+        if (!"running".equals(entity.status)) {
+            return null;
+        }
+        JsonNode config = readConfig(entity.configJson);
+        String controlVariant = config.path("control_variant").asText(null);
+        List<ExperimentSplitter.Variant> variants = ExperimentSplitter.parseVariants(config);
+        String assigned = ExperimentSplitter.assign(entity.salt, subjectId.trim(), variants);
+        if (assigned == null && controlVariant != null) {
+            return controlVariant;
+        }
+        return assigned;
     }
 
     private GameEntity requireGame(String gameId) {

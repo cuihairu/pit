@@ -1,0 +1,220 @@
+package io.oddsmaker.control.experiment;
+
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * A/B 实验统计引擎。
+ *
+ * - 转化类指标：两总体比例 z-test（pooled 方差），输出 lift、95% CI、双尾 p 值；
+ * - 均值类指标：Welch t 统计量 + 正态近似 p 值（大样本下与 t 分布收敛，样本 < 30 标注 low_power 提示）；
+ * - 多变体时以配置中 control_variant（默认第一个变体）为基线两两对比。
+ */
+@Service
+public class ExperimentStatsService {
+
+    /** 单变体样本统计 */
+    public static class ArmStat {
+        public String variant;
+        public long count;
+        public double sum;
+        public double sumSquares;
+        public long successes;
+
+        public double mean() {
+            return count > 0 ? sum / count : 0.0;
+        }
+
+        public double rate() {
+            return count > 0 ? (double) successes / count : 0.0;
+        }
+
+        public double variance() {
+            if (count < 2) return 0.0;
+            double m = mean();
+            return Math.max(0.0, (sumSquares - count * m * m) / (count - 1));
+        }
+    }
+
+    /** 一次对比的检验结果 */
+    public static class Comparison {
+        public String metric;
+        public String control;
+        public String treatment;
+        public double controlValue;
+        public double treatmentValue;
+        /** 相对提升（treatment - control）/ control，control 为 0 时为 null */
+        public Double relativeLift;
+        public double absoluteDiff;
+        public double ciLow;
+        public double ciHigh;
+        public double pValue;
+        public boolean significant;   // alpha = 0.05
+        public long controlSamples;
+        public long treatmentSamples;
+        public String testType;       // proportion_z_test | welch_t_test
+        public boolean lowPowerHint;  // 样本量不足提示
+    }
+
+    private static final double Z_95 = 1.959964;  // 97.5 分位
+    private static final double ALPHA = 0.05;
+
+    /**
+     * 对一个指标执行多变体对比：其余变体逐个与 control 比较。
+     */
+    public List<Comparison> compare(String metric, String controlVariant, Map<String, ArmStat> arms) {
+        List<Comparison> out = new ArrayList<>();
+        if (controlVariant == null || !arms.containsKey(controlVariant)) {
+            return out;
+        }
+        ArmStat control = arms.get(controlVariant);
+        boolean rateLike = isRateLike(arms.values());
+        for (Map.Entry<String, ArmStat> entry : arms.entrySet()) {
+            if (entry.getKey().equals(controlVariant)) continue;
+            Comparison c = rateLike
+                ? proportionTest(metric, control, entry.getValue())
+                : welchTest(metric, control, entry.getValue());
+            out.add(c);
+        }
+        return out;
+    }
+
+    /** 转化率对比：pooled 比例 z 检验 */
+    public Comparison proportionTest(String metric, ArmStat control, ArmStat treatment) {
+        Comparison c = base(metric, control, treatment, "proportion_z_test");
+        double p1 = control.rate();
+        double p2 = treatment.rate();
+        c.controlValue = p1;
+        c.treatmentValue = p2;
+        c.absoluteDiff = p2 - p1;
+        c.relativeLift = p1 > 0 ? (p2 - p1) / p1 : null;
+
+        long n1 = control.count;
+        long n2 = treatment.count;
+        if (n1 > 0 && n2 > 0) {
+            double pooled = (double) (control.successes + treatment.successes) / (n1 + n2);
+            double se = Math.sqrt(pooled * (1 - pooled) * (1.0 / n1 + 1.0 / n2));
+            if (se > 0) {
+                double z = c.absoluteDiff / se;
+                c.pValue = twoTailedNormalP(z);
+            }
+            // 差异的 95% CI（非 pooled 方差）
+            double seCi = Math.sqrt(p1 * (1 - p1) / n1 + p2 * (1 - p2) / n2);
+            c.ciLow = c.absoluteDiff - Z_95 * seCi;
+            c.ciHigh = c.absoluteDiff + Z_95 * seCi;
+        }
+        finalize(c);
+        return c;
+    }
+
+    /** 均值对比：Welch t 统计量，正态近似 p 值 */
+    public Comparison welchTest(String metric, ArmStat control, ArmStat treatment) {
+        Comparison c = base(metric, control, treatment, "welch_t_test");
+        double m1 = control.mean();
+        double m2 = treatment.mean();
+        c.controlValue = m1;
+        c.treatmentValue = m2;
+        c.absoluteDiff = m2 - m1;
+        c.relativeLift = m1 != 0 ? (m2 - m1) / m1 : null;
+
+        long n1 = control.count;
+        long n2 = treatment.count;
+        if (n1 >= 2 && n2 >= 2) {
+            double v1 = control.variance();
+            double v2 = treatment.variance();
+            double se = Math.sqrt(v1 / n1 + v2 / n2);
+            if (se > 0) {
+                double t = c.absoluteDiff / se;
+                c.pValue = twoTailedNormalP(t);
+            }
+            c.ciLow = c.absoluteDiff - Z_95 * Math.sqrt(v1 / n1 + v2 / n2);
+            c.ciHigh = c.absoluteDiff + Z_95 * Math.sqrt(v1 / n1 + v2 / n2);
+            c.lowPowerHint = n1 < 30 || n2 < 30;
+        } else {
+            c.lowPowerHint = true;
+        }
+        finalize(c);
+        return c;
+    }
+
+    private Comparison base(String metric, ArmStat control, ArmStat treatment, String testType) {
+        Comparison c = new Comparison();
+        c.metric = metric;
+        c.control = control.variant;
+        c.treatment = treatment.variant;
+        c.controlSamples = control.count;
+        c.treatmentSamples = treatment.count;
+        c.testType = testType;
+        return c;
+    }
+
+    private void finalize(Comparison c) {
+        c.significant = c.pValue > 0 && c.pValue < ALPHA;
+    }
+
+    /** 判定指标口径：任一 arm 的 successes>0 且 successes<=count 视为转化率类 */
+    private boolean isRateLike(Iterable<ArmStat> arms) {
+        for (ArmStat arm : arms) {
+            if (arm.successes > 0) {
+                return arm.successes <= arm.count;
+            }
+        }
+        return false;
+    }
+
+    /** 标准正态双尾 p 值：erf 有理近似（Abramowitz & Stegun 7.1.26，绝对误差 < 1.5e-7） */
+    static double twoTailedNormalP(double z) {
+        return 2.0 * (1.0 - normalCdf(Math.abs(z)));
+    }
+
+    static double normalCdf(double x) {
+        return 0.5 * (1.0 + erf(x / Math.sqrt(2.0)));
+    }
+
+    private static double erf(double x) {
+        double t = 1.0 / (1.0 + 0.5 * Math.abs(x));
+        double y = t * Math.exp(-x * x - 1.26551223
+            + t * (1.00002368
+            + t * (0.37409196
+            + t * (0.09678418
+            + t * (-0.18628806
+            + t * (0.27886807
+            + t * (-1.13520398
+            + t * (1.48851587
+            + t * (-0.82215223
+            + t * 0.17087277)))))))));
+        return x >= 0 ? 1.0 - y : y - 1.0;
+    }
+
+    /** 汇总快照为每变体 ArmStat（按指标分组） */
+    public static Map<String, Map<String, ArmStat>> aggregate(List<ExperimentMetricSnapshotEntity> snapshots) {
+        Map<String, Map<String, ArmStat>> byMetric = new HashMap<>();
+        for (ExperimentMetricSnapshotEntity s : snapshots) {
+            byMetric.computeIfAbsent(s.metricName, k -> new HashMap<>())
+                .merge(s.variant, armOf(s), ExperimentStatsService::merge);
+        }
+        return byMetric;
+    }
+
+    private static ArmStat armOf(ExperimentMetricSnapshotEntity s) {
+        ArmStat a = new ArmStat();
+        a.variant = s.variant;
+        a.count = s.count;
+        a.sum = s.sum;
+        a.sumSquares = s.sumSquares;
+        a.successes = s.successes;
+        return a;
+    }
+
+    private static ArmStat merge(ArmStat a, ArmStat b) {
+        a.count += b.count;
+        a.sum += b.sum;
+        a.sumSquares += b.sumSquares;
+        a.successes += b.successes;
+        return a;
+    }
+}

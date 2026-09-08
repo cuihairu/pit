@@ -287,6 +287,18 @@ public class ApiController {
         return ResponseEntity.ok(experimentService.pauseExperiment(id));
     }
 
+    @GetMapping("/experiments/{id}/assign")
+    @Operation(summary = "服务端分流", description = "为主体分配实验变体（确定性哈希，仅 running 实验分流）")
+    public ResponseEntity<Map<String, Object>> assignExperiment(@PathVariable String id,
+                                                                @RequestParam String subjectId) {
+        String variant = experimentService.assign(id, subjectId);
+        if (variant == null) {
+            // 非 running 或无有效变体：返回 control 兜底，不抛错，保证游戏主流程不受实验平台影响
+            return ResponseEntity.ok(Map.of("experimentId", id, "subjectId", subjectId, "variant", "control", "assigned", false));
+        }
+        return ResponseEntity.ok(Map.of("experimentId", id, "subjectId", subjectId, "variant", variant, "assigned", true));
+    }
+
     @DeleteMapping("/experiments/{id}")
     public ResponseEntity<Map<String, Object>> deleteExperiment(@PathVariable String id) {
         boolean deleted = experimentService.deleteExperiment(id);
