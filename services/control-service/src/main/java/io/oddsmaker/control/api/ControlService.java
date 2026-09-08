@@ -256,6 +256,10 @@ public class ControlService {
         out.gameId = key.gameId;
         out.environment = environment.name;
         out.keyRole = key.keyType == null ? null : key.keyType.name().toLowerCase(Locale.ROOT);
+        // 环境级策略下发：状态门禁 + 采样配置由 Gateway 统一执行
+        out.envStatus = environment.status == null ? null : environment.status.name().toLowerCase(Locale.ROOT);
+        out.envEnableSampling = environment.enableSampling;
+        out.envSampleRate = environment.sampleRate;
         out.canWrite = key.canWrite;
         out.requireHmac = key.requireHmac;
         out.rpm = key.rpm;

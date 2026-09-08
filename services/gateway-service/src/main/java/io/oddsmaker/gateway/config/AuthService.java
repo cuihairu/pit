@@ -36,6 +36,9 @@ public class AuthService {
         public String gameId;
         public String environment;
         public String keyRole; // client|server|admin
+        public String envStatus; // active|inactive|maintenance
+        public Boolean envEnableSampling;
+        public Double envSampleRate;
         public Boolean canWrite;
         public Boolean requireHmac;
         public Integer rpm;
@@ -53,6 +56,23 @@ public class AuthService {
 
         public boolean allowsWrite() {
             return canWrite == null || canWrite;
+        }
+
+        /**
+         * 环境非 active（维护/停用）时拒绝写入。
+         */
+        public boolean envWritable() {
+            return envStatus == null || "active".equalsIgnoreCase(envStatus);
+        }
+
+        /**
+         * 环境级采样：null 或 1.0 表示全量。
+         */
+        public boolean samplingEnabled() {
+            return Boolean.TRUE.equals(envEnableSampling)
+                && envSampleRate != null
+                && envSampleRate > 0
+                && envSampleRate < 1.0;
         }
     }
 

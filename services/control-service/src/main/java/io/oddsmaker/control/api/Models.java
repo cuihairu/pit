@@ -51,6 +51,9 @@ public class Models {
         public String gameId;
         public String environment;
         public String keyRole; // client|server|admin
+        public String envStatus; // active|inactive|maintenance
+        public Boolean envEnableSampling;
+        public Double envSampleRate;
         public Boolean canWrite;
         public Boolean requireHmac;
         public Integer rpm;

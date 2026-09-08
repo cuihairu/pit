@@ -1,6 +1,8 @@
 # Changelog
 
 ## v0.2.0 (unreleased)
+- 环境策略绑定下发执行：Control 内部接口透出 `envStatus/envEnableSampling/envSampleRate`；Gateway 对非 active 环境返回 503 `environment_unavailable`，环境级确定性采样按 device_id SHA-256 分桶（同设备事件同进同出，保漏斗/留存口径），响应新增 `sampled_out` 计数
+- 采样分桶弃用 String.hashCode（规整前缀聚集严重），改用 SHA-256 摘要取桶
 - Game API 补齐默认时区：`games.default_timezone`（IANA 标识，默认 UTC），DTO 校验 + Service 层 ZoneId 白名单校验
 - Game 生命周期操作接入审计日志：创建/更新/删除/发布/下线全量记录（P1「审计日志」覆盖 Game 资源）
 - GameServiceTest 从空壳补齐 8 个用例：默认值、时区校验、状态机、软删除级联、审计断言

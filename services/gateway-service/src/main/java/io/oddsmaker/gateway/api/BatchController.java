@@ -71,6 +71,7 @@ public class BatchController {
     public static class BatchResponse {
         public List<String> accepted = new CopyOnWriteArrayList<>();
         public List<Map<String, String>> rejected = new CopyOnWriteArrayList<>();
+        public int sampled_out = 0;
         public int next_hint_ms = 3000;
     }
 
@@ -94,6 +95,10 @@ public class BatchController {
             String apiKey = req.getHeaders().getFirst("x-api-key");
             AuthService.ApiKeyContext keyContext = (AuthService.ApiKeyContext) exchange.getAttributes()
                 .get("oddsmaker.api_key_context");
+            if (keyContext != null && !keyContext.envWritable()) {
+                throw new ResponseStatusException(
+                    org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, "environment_unavailable");
+            }
             PolicyService.Policy policy = policyService.getPolicy(apiKey);
             PiiPolicy.Overrides piiOverrides = policyToOverrides(policy);
 
@@ -157,10 +162,30 @@ public class BatchController {
                 return Mono.just(resp);
             }
 
+            // 环境级确定性采样：按 device_id 哈希分桶，保证同一设备的事件采样结果稳定，
+            // 避免漏斗/留存分析因随机采样断裂。被采样丢弃的事件计入 sampled_out，不进 DLQ。
+            final List<Event> eventsToPublish;
+            if (keyContext != null && keyContext.samplingEnabled()) {
+                List<Event> sampledEvents = new ArrayList<>(validEvents.size());
+                for (Event event : validEvents) {
+                    if (sampledIn(event, keyContext.envSampleRate)) {
+                        sampledEvents.add(event);
+                    } else {
+                        resp.sampled_out++;
+                    }
+                }
+                if (sampledEvents.isEmpty()) {
+                    return Mono.just(resp);
+                }
+                eventsToPublish = sampledEvents;
+            } else {
+                eventsToPublish = validEvents;
+            }
+
             // 2) 构建封禁检查目标（device_id + user_id）
-            String gameId = validEvents.get(0).gameId;
+            String gameId = eventsToPublish.get(0).gameId;
             List<BlockListClient.BatchTarget> targets = new ArrayList<>();
-            for (Event event : validEvents) {
+            for (Event event : eventsToPublish) {
                 if (event.deviceId != null && !event.deviceId.isEmpty()) {
                     targets.add(new BlockListClient.BatchTarget("device_id", event.deviceId));
                 }
@@ -171,7 +196,7 @@ public class BatchController {
 
             // 无封禁检查目标 → 直接发布
             if (targets.isEmpty()) {
-                for (Event event : validEvents) {
+                for (Event event : eventsToPublish) {
                     try {
                         publisher.publish(event);
                         resp.accepted.add(event.eventId);
@@ -186,7 +211,7 @@ public class BatchController {
             return blockListClient.batchCheck(gameId, targets)
                     .map(blockedMap -> {
                         // 4) 处理事件：封禁的拒绝，非封禁的发布
-                        for (Event event : validEvents) {
+                        for (Event event : eventsToPublish) {
                             if (isBlocked(event, blockedMap)) {
                                 reject(resp, event, "blocked");
                                 continue;
@@ -213,6 +238,28 @@ public class BatchController {
             if (Boolean.TRUE.equals(b)) return true;
         }
         return false;
+    }
+
+    /**
+     * 确定性采样：以 device_id（缺失时退化为 event_id）哈希分桶。
+     * 同一设备的所有事件落同一侧，保证漏斗与留存口径一致。
+     * 使用 SHA-256 而非 String.hashCode：后者对规整前缀字符串聚集严重，会导致采样偏斜。
+     */
+    private boolean sampledIn(Event event, double sampleRate) {
+        String seed = event.deviceId != null && !event.deviceId.isEmpty()
+            ? event.deviceId
+            : String.valueOf(event.eventId);
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(seed.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            int bucket = Math.floorMod(
+                ((digest[0] & 0xFF) << 24) | ((digest[1] & 0xFF) << 16) | ((digest[2] & 0xFF) << 8) | (digest[3] & 0xFF),
+                10_000);
+            return bucket < (int) Math.round(sampleRate * 10_000);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            // SHA-256 为 JVM 必备算法，理论上不可达
+            return true;
+        }
     }
 
     private boolean matchesApiKeyScope(Event event, AuthService.ApiKeyContext keyContext) {
